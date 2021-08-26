@@ -2,6 +2,7 @@ from __future__ import unicode_literals
 
 import time
 from datetime import datetime
+import pytz
 
 from moto.core import BaseBackend, BaseModel
 from collections import OrderedDict
@@ -72,7 +73,7 @@ class FakeDatabase(BaseModel):
     def __init__(self, database_name, database_input):
         self.name = database_name
         self.input = database_input
-        self.created_time = datetime.utcnow()
+        self.created_time = datetime.utcnow().replace(tzinfo=pytz.utc)
         self.tables = OrderedDict()
 
     def as_dict(self):
