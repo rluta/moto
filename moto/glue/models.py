@@ -68,6 +68,8 @@ class GlueBackend(BaseBackend):
             raise TableNotFoundException(table_name)
         return {}
 
+    def get_user_defined_functions(self, pattern):
+        return []
 
 class FakeDatabase(BaseModel):
     def __init__(self, database_name, database_input):
@@ -97,10 +99,15 @@ class FakeTable(BaseModel):
         self.name = table_name
         self.partitions = OrderedDict()
         self.versions = []
+        self.create_time = datetime.utcnow().replace(tzinfo=pytz.utc).isoformat()
         self.update(table_input)
 
     def update(self, table_input):
-        self.versions.append(table_input)
+        table_info = dict(table_input)
+        table_info['StorageDescriptor'] = FakeStorageDescriptor(table_input['StorageDescriptor']).as_dict()
+        if 'UpdateTime' not in table_info:
+            table_info['UpdateTime'] = datetime.utcnow().replace(tzinfo=pytz.utc).isoformat()
+        self.versions.append(table_info)
 
     def get_version(self, ver):
         try:
@@ -116,7 +123,12 @@ class FakeTable(BaseModel):
             raise VersionNotFoundException()
 
     def as_dict(self, version=-1):
-        obj = {"DatabaseName": self.database_name, "Name": self.name}
+        obj = {"DatabaseName": self.database_name,
+               "Name": self.name,
+               "Retention": 0,
+               "CreateTime": self.create_time,
+               "LastAccessTime": datetime.utcnow().replace(tzinfo=pytz.utc).isoformat()
+               }
         obj.update(self.get_version(version))
         return obj
 
@@ -175,6 +187,31 @@ class FakePartition(BaseModel):
             "CreationTime": self.creation_time,
         }
         obj.update(self.partition_input)
+        return obj
+
+
+class FakeStorageDescriptor(BaseModel):
+    compressed: bool = False
+    number_of_buckets: int = 0
+    serde_info: dict = {}
+    bucket_columns: list = []
+    sort_columns: list = []
+    parameters: dict = {}
+    stored_as_sub_directories: bool = False
+
+    def __init__(self, storage_input):
+        self.storage_input = storage_input
+
+    def as_dict(self):
+        obj = {
+            "Compressed": self.compressed,
+            "NumberOfBuckets": self.number_of_buckets,
+            "BucketColumns": self.bucket_columns,
+            "SortColumns": self.sort_columns,
+            "Parameters": {},
+            "StoredAsSubDirectories": self.stored_as_sub_directories
+        }
+        obj.update(self.storage_input)
         return obj
 
 

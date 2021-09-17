@@ -34,7 +34,7 @@ def test_create_database():
     database.get("LocationUri").should.equal(database_input.get("LocationUri"))
     database.get("Parameters").should.equal(database_input.get("Parameters"))
     if not settings.TEST_SERVER_MODE:
-        database.get("CreateTime").should.equal(FROZEN_CREATE_TIME)
+        database.get("CreateTime").should.equal(FROZEN_CREATE_TIME.replace(tzinfo=pytz.utc))
     database.get("CreateTableDefaultPermissions").should.equal(
         database_input.get("CreateTableDefaultPermissions")
     )
