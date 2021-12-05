@@ -1,6 +1,9 @@
 name: DependencyTest
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'  # every day at midnight
 
 jobs:
   runtest:
@@ -8,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [ 3.8 ]
+        python-version: [ 3.6, 3.8 ]
 
     steps:
     - name: Checkout repo
@@ -20,3 +23,10 @@ jobs:
     - name: Run test
       run: |
         scripts/dependency_test.sh
+    - name: Archive logs
+      if: always()
+      uses: actions/upload-artifact@v2
+      with:
+        name: buildfolder-${{ matrix.python-version }}
+        path: |
+          test_results_*.log

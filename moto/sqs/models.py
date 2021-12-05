@@ -1,5 +1,3 @@
-from __future__ import unicode_literals
-
 import base64
 import hashlib
 import json
@@ -9,6 +7,7 @@ import string
 
 import struct
 from copy import deepcopy
+from typing import Dict
 from xml.sax.saxutils import escape
 
 from boto3 import Session
@@ -25,7 +24,6 @@ from moto.core.utils import (
 from .utils import generate_receipt_handle
 from .exceptions import (
     MessageAttributesInvalid,
-    MessageNotInflight,
     QueueDoesNotExist,
     QueueAlreadyExists,
     ReceiptHandleIsInvalid,
@@ -74,6 +72,7 @@ class Message(BaseModel):
         self._body = body
         self.message_attributes = {}
         self.receipt_handle = None
+        self._old_receipt_handles = []
         self.sender_id = DEFAULT_SENDER_ID
         self.sent_timestamp = None
         self.approximate_first_receive_timestamp = None
@@ -179,6 +178,7 @@ class Message(BaseModel):
         if visibility_timeout:
             self.change_visibility(visibility_timeout)
 
+        self._old_receipt_handles.append(self.receipt_handle)
         self.receipt_handle = generate_receipt_handle()
 
     def change_visibility(self, visibility_timeout):
@@ -204,6 +204,16 @@ class Message(BaseModel):
             return True
         return False
 
+    @property
+    def all_receipt_handles(self):
+        return [self.receipt_handle] + self._old_receipt_handles
+
+    def had_receipt_handle(self, receipt_handle):
+        """
+        Check if this message ever had this receipt_handle in the past
+        """
+        return receipt_handle in self.all_receipt_handles
+
 
 class Queue(CloudFormationModel):
     BASE_ATTRIBUTES = [
@@ -221,7 +231,12 @@ class Queue(CloudFormationModel):
         "ReceiveMessageWaitTimeSeconds",
         "VisibilityTimeout",
     ]
-    FIFO_ATTRIBUTES = ["FifoQueue", "ContentBasedDeduplication"]
+    FIFO_ATTRIBUTES = [
+        "ContentBasedDeduplication",
+        "DeduplicationScope",
+        "FifoQueue",
+        "FifoThroughputLimit",
+    ]
     KMS_ATTRIBUTES = ["KmsDataKeyReusePeriodSeconds", "KmsMasterKeyId"]
     ALLOWED_PERMISSIONS = (
         "*",
@@ -243,6 +258,7 @@ class Queue(CloudFormationModel):
 
         self._messages = []
         self._pending_messages = set()
+        self.deleted_messages = set()
 
         now = unix_time()
         self.created_timestamp = now
@@ -256,8 +272,10 @@ class Queue(CloudFormationModel):
         # default settings for a non fifo queue
         defaults = {
             "ContentBasedDeduplication": "false",
+            "DeduplicationScope": "queue",
             "DelaySeconds": 0,
             "FifoQueue": "false",
+            "FifoThroughputLimit": "perQueue",
             "KmsDataKeyReusePeriodSeconds": 300,  # five minutes
             "KmsMasterKeyId": None,
             "MaximumMessageSize": MAXIMUM_MESSAGE_LENGTH,
@@ -387,12 +405,15 @@ class Queue(CloudFormationModel):
 
     @classmethod
     def create_from_cloudformation_json(
-        cls, resource_name, cloudformation_json, region_name
+        cls, resource_name, cloudformation_json, region_name, **kwargs
     ):
         properties = deepcopy(cloudformation_json["Properties"])
         # remove Tags from properties and convert tags list to dict
         tags = properties.pop("Tags", [])
         tags_dict = tags_from_cloudformation_tags_list(tags)
+
+        # Could be passed as an integer - just treat it as a string
+        resource_name = str(resource_name)
 
         sqs_backend = sqs_backends[region_name]
         return sqs_backend.create_queue(
@@ -525,7 +546,36 @@ class Queue(CloudFormationModel):
                 [backend.delete_message(self.name, m.receipt_handle) for m in messages]
             else:
                 # Make messages visible again
-                [m.change_visibility(visibility_timeout=0) for m in messages]
+                [
+                    backend.change_message_visibility(
+                        self.name, m.receipt_handle, visibility_timeout=0
+                    )
+                    for m in messages
+                ]
+
+    def delete_message(self, receipt_handle):
+        if receipt_handle in self.deleted_messages:
+            # Already deleted - gracefully handle deleting it again
+            return
+
+        if not any(
+            message.had_receipt_handle(receipt_handle) for message in self._messages
+        ):
+            raise ReceiptHandleIsInvalid()
+
+        # Delete message from queue regardless of pending state
+        new_messages = []
+        for message in self._messages:
+            if message.had_receipt_handle(receipt_handle):
+                self.pending_messages.discard(message)
+                self.deleted_messages.update(message.all_receipt_handles)
+                continue
+            new_messages.append(message)
+        self._messages = new_messages
+
+    @classmethod
+    def has_cfn_attr(cls, attribute_name):
+        return attribute_name in ["Arn", "QueueName"]
 
     def get_cfn_attribute(self, attribute_name):
         from moto.cloudformation.exceptions import UnformattedGetAttTemplateException
@@ -567,7 +617,7 @@ def _filter_message_attributes(message, input_message_attributes):
 class SQSBackend(BaseBackend):
     def __init__(self, region_name):
         self.region_name = region_name
-        self.queues = {}
+        self.queues: Dict[str, Queue] = {}
         super(SQSBackend, self).__init__()
 
     def reset(self):
@@ -575,6 +625,13 @@ class SQSBackend(BaseBackend):
         self._reset_model_refs()
         self.__dict__ = {}
         self.__init__(region_name)
+
+    @staticmethod
+    def default_vpc_endpoint_service(service_region, zones):
+        """Default VPC endpoint service."""
+        return BaseBackend.default_vpc_endpoint_service_factory(
+            service_region, zones, "sqs"
+        )
 
     def create_queue(self, name, tags=None, **kwargs):
         queue = self.queues.get(name)
@@ -628,15 +685,14 @@ class SQSBackend(BaseBackend):
         return queue
 
     def delete_queue(self, queue_name):
-        if queue_name in self.queues:
-            return self.queues.pop(queue_name)
-        return False
+        self.get_queue(queue_name)
+
+        del self.queues[queue_name]
 
     def get_queue_attributes(self, queue_name, attribute_names):
         queue = self.get_queue(queue_name)
-
-        if not len(attribute_names):
-            attribute_names.append("All")
+        if not attribute_names:
+            return {}
 
         valid_names = (
             ["All"]
@@ -714,6 +770,12 @@ class SQSBackend(BaseBackend):
             if queue.fifo_queue:
                 raise MissingParameter("MessageGroupId")
         else:
+            if not queue.fifo_queue:
+                msg = (
+                    "Value {} for parameter MessageGroupId is invalid. "
+                    "Reason: The request include parameter that is not valid for this queue type."
+                ).format(group_id)
+                raise InvalidParameterValue(msg)
             message.group_id = group_id
 
         if message_attributes:
@@ -843,12 +905,14 @@ class SQSBackend(BaseBackend):
 
                 queue.pending_messages.add(message)
                 message.mark_received(visibility_timeout=visibility_timeout)
-                _filter_message_attributes(message, message_attribute_names)
+                # Create deepcopy to not mutate the message state when filtering for attributes
+                message_copy = deepcopy(message)
+                _filter_message_attributes(message_copy, message_attribute_names)
                 if not self.is_message_valid_based_on_retention_period(
                     queue_name, message
                 ):
                     break
-                result.append(message)
+                result.append(message_copy)
                 if len(result) >= count:
                     break
 
@@ -874,27 +938,12 @@ class SQSBackend(BaseBackend):
     def delete_message(self, queue_name, receipt_handle):
         queue = self.get_queue(queue_name)
 
-        if not any(
-            message.receipt_handle == receipt_handle for message in queue._messages
-        ):
-            raise ReceiptHandleIsInvalid()
-
-        new_messages = []
-        for message in queue._messages:
-            # Only delete message if it is not visible and the receipt_handle
-            # matches.
-            if message.receipt_handle == receipt_handle:
-                queue.pending_messages.remove(message)
-                continue
-            new_messages.append(message)
-        queue._messages = new_messages
+        queue.delete_message(receipt_handle)
 
     def change_message_visibility(self, queue_name, receipt_handle, visibility_timeout):
         queue = self.get_queue(queue_name)
         for message in queue._messages:
-            if message.receipt_handle == receipt_handle:
-                if message.visible:
-                    raise MessageNotInflight
+            if message.had_receipt_handle(receipt_handle):
 
                 visibility_timeout_msec = int(visibility_timeout) * 1000
                 given_visibility_timeout = unix_time_millis() + visibility_timeout_msec
@@ -907,7 +956,7 @@ class SQSBackend(BaseBackend):
                     )
 
                 message.change_visibility(visibility_timeout)
-                if message.visible:
+                if message.visible and message in queue.pending_messages:
                     # If the message is visible again, remove it from pending
                     # messages.
                     queue.pending_messages.remove(message)
@@ -1034,7 +1083,9 @@ class SQSBackend(BaseBackend):
         return self.get_queue(queue_name)
 
     def is_message_valid_based_on_retention_period(self, queue_name, message):
-        message_attributes = self.get_queue_attributes(queue_name, [])
+        message_attributes = self.get_queue_attributes(
+            queue_name, ["MessageRetentionPeriod"]
+        )
         retain_until = (
             message_attributes.get("MessageRetentionPeriod")
             + message.sent_timestamp / 1000

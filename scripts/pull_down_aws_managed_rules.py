@@ -1,32 +1,44 @@
 #!/usr/bin/env python
 """Download markdown files with AWS managed ConfigRule info and convert to JSON.
 
-The first markdown file is read to obtain the names of markdown files for
-all the AWS managed config rules.  Then each of those markdown files are read
-and info is extracted with the final results written to a JSON file.
+Invocation:  ./pull_down_aws_managed_rules.py
+    - Execute from the moto/scripts directory.
+    - To track download progress, use the "-v" command line switch.
+    - MANAGED_RULES_OUTPUT_FILENAME is the variable containing the name of
+      the file that will be overwritten when this script is run.
 
-The JSON output will look as follows:
+    NOTE:  This script takes a while to download all the files.
 
-{
-    "ManagedRules": [
-        {
-            "ACCESS_KEYS_ROTATED": {
-                "AWS Region": "All supported AWS regions",
-                "Parameters": [
-                    {
-                        "Default": "90",
-                        "Name": "maxAccessKeyAgeType",
-                        "Optional": false,
-                        "Type": "intDefault"
-                        }
-                ],
-                "Trigger type": "Periodic"
+Summary:
+    The first markdown file is read to obtain the names of markdown files
+    for all the AWS managed config rules.  Then each of those markdown files
+    are read and info is extracted with the final results written to a JSON
+    file.
+
+    The JSON output will look as follows:
+
+    {
+        "ManagedRules": [
+            {
+                "ACCESS_KEYS_ROTATED": {
+                    "AWS Region": "All supported AWS regions",
+                    "Parameters": [
+                        {
+                            "Default": "90",
+                            "Name": "maxAccessKeyAgeType",
+                            "Optional": false,
+                            "Type": "intDefault"
+                            }
+                    ],
+                    "Trigger type": "Periodic"
+                },
             },
-        },
-        ...
-    ]
-}
+            ...
+        ]
+    }
 """
+import argparse
+
 import json
 import re
 import sys
@@ -123,8 +135,25 @@ def extract_managed_rule_info(lines):
     return rule_info
 
 
+def process_cmdline_args():
+    """Return parsed command line arguments."""
+    parser = argparse.ArgumentParser(
+        description=(
+            f"Download AWS config rules and merge output to create the "
+            f"JSON file {MANAGED_RULES_OUTPUT_FILENAME}"
+        )
+    )
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Report on progress of downloads"
+    )
+    return parser.parse_args()
+
+
 def main():
     """Create a JSON file containing info pulled from AWS markdown files."""
+    args = process_cmdline_args()
+
+    # Get the markdown file with links to the markdown files for services.
     req = requests.get(AWS_MARKDOWN_URL_START + LIST_OF_MARKDOWNS_URL)
 
     # Extract the list of all the markdown files on the page.
@@ -135,6 +164,8 @@ def main():
     # and parameter information.
     managed_rules = {"ManagedRules": {}}
     for markdown_file in markdown_files:
+        if args.verbose:
+            print(f"Downloading {markdown_file} ...")
         req = requests.get(AWS_MARKDOWN_URL_START + markdown_file)
         rules = extract_managed_rule_info(req.text.split("\n"))
 
@@ -142,7 +173,7 @@ def main():
         managed_rules["ManagedRules"][rule_id] = rules
 
     # Create a JSON file with the extracted managed rule info.
-    with open(MANAGED_RULES_OUTPUT_FILENAME, "w") as fhandle:
+    with open(MANAGED_RULES_OUTPUT_FILENAME, "w", encoding="utf-8") as fhandle:
         json.dump(managed_rules, fhandle, sort_keys=True, indent=2)
     return 0
 

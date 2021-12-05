@@ -1,10 +1,9 @@
-from __future__ import unicode_literals
-
 import base64
 import hashlib
 import fnmatch
 import random
 import re
+import ipaddress
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
@@ -34,10 +33,12 @@ EC2_RESOURCE_TO_PREFIX = {
     "route-table": "rtb",
     "route-table-association": "rtbassoc",
     "security-group": "sg",
+    "security-group-rule": "sgr",
     "snapshot": "snap",
     "spot-instance-request": "sir",
     "spot-fleet-request": "sfr",
     "subnet": "subnet",
+    "subnet-ipv6-cidr-block-association": "subnet-cidr-assoc",
     "reservation": "r",
     "volume": "vol",
     "vpc": "vpc",
@@ -50,6 +51,7 @@ EC2_RESOURCE_TO_PREFIX = {
     "vpn-connection": "vpn",
     "vpn-gateway": "vgw",
     "iam-instance-profile-association": "iip-assoc",
+    "carrier-gateway": "cagw",
 }
 
 
@@ -79,7 +81,11 @@ def random_reservation_id():
 
 
 def random_security_group_id():
-    return random_id(prefix=EC2_RESOURCE_TO_PREFIX["security-group"])
+    return random_id(prefix=EC2_RESOURCE_TO_PREFIX["security-group"], size=17)
+
+
+def random_security_group_rule_id():
+    return random_id(prefix=EC2_RESOURCE_TO_PREFIX["security-group-rule"], size=17)
 
 
 def random_flow_log_id():
@@ -100,6 +106,12 @@ def random_spot_fleet_request_id():
 
 def random_subnet_id():
     return random_id(prefix=EC2_RESOURCE_TO_PREFIX["subnet"])
+
+
+def random_subnet_ipv6_cidr_block_association_id():
+    return random_id(
+        prefix=EC2_RESOURCE_TO_PREFIX["subnet-ipv6-cidr-block-association"]
+    )
 
 
 def random_subnet_association_id():
@@ -208,11 +220,26 @@ def random_iam_instance_profile_association_id():
     return random_id(prefix=EC2_RESOURCE_TO_PREFIX["iam-instance-profile-association"])
 
 
+def random_carrier_gateway_id():
+    return random_id(prefix=EC2_RESOURCE_TO_PREFIX["carrier-gateway"], size=17)
+
+
 def random_public_ip():
     return "54.214.{0}.{1}".format(random.choice(range(255)), random.choice(range(255)))
 
 
-def random_private_ip():
+def random_private_ip(cidr=None, ipv6=False):
+    # prefix - ula.prefixlen : get number of remaing length for the IP.
+    #                          prefix will be 32 for IPv4 and 128 for IPv6.
+    #  random.getrandbits() will generate remaining bits for IPv6 or Ipv4 in decimal format
+    if cidr:
+        if ipv6:
+            ula = ipaddress.IPv6Network(cidr)
+            return str(ula.network_address + (random.getrandbits(128 - ula.prefixlen)))
+        ula = ipaddress.IPv4Network(cidr)
+        return str(ula.network_address + (random.getrandbits(32 - ula.prefixlen)))
+    if ipv6:
+        return "2001::cafe:%x/64" % random.getrandbits(16)
     return "10.{0}.{1}.{2}".format(
         random.choice(range(255)), random.choice(range(255)), random.choice(range(255))
     )
@@ -224,17 +251,36 @@ def random_ip():
     )
 
 
+def generate_dns_from_ip(ip, type="internal"):
+    splits = ip.split("/")[0].split(".") if "/" in ip else ip.split(".")
+    return "ip-{}-{}-{}-{}.ec2.{}".format(
+        splits[0], splits[1], splits[2], splits[3], type
+    )
+
+
+def random_mac_address():
+    return "02:00:00:%02x:%02x:%02x" % (
+        random.randint(0, 255),
+        random.randint(0, 255),
+        random.randint(0, 255),
+    )
+
+
 def randor_ipv4_cidr():
     return "10.0.{}.{}/16".format(random.randint(0, 255), random.randint(0, 255))
 
 
 def random_ipv6_cidr():
-    return "2400:6500:{}:{}::/56".format(random_resource_id(4), random_resource_id(4))
+    return "2400:6500:{}:{}00::/56".format(random_resource_id(4), random_resource_id(2))
 
 
-def generate_route_id(route_table_id, cidr_block, ipv6_cidr_block=None):
+def generate_route_id(
+    route_table_id, cidr_block, ipv6_cidr_block=None, prefix_list=None
+):
     if ipv6_cidr_block and not cidr_block:
         cidr_block = ipv6_cidr_block
+    if prefix_list and not cidr_block:
+        cidr_block = prefix_list
     return "%s~%s" % (route_table_id, cidr_block)
 
 
@@ -328,6 +374,16 @@ def dict_from_querystring(parameter, querystring_dict):
             use_dict[use_dict_index][use_dict_element_property] = value[0]
 
     return use_dict
+
+
+def get_attribute_value(parameter, querystring_dict):
+    for key, value in querystring_dict.items():
+        match = re.search(r"{0}.Value".format(parameter), key)
+        if match:
+            if value[0].lower() in ["true", "false"]:
+                return True if value[0].lower() in ["true"] else False
+            return value[0]
+    return None
 
 
 def get_object_value(obj, attr):
@@ -510,6 +566,10 @@ def is_filter_matching(obj, filter, filter_value):
             return True
         return False
 
+    if isinstance(value, type({}.keys())):
+        if isinstance(filter_value, str) and filter_value in value:
+            return True
+
     try:
         value = set(value)
         return (value and value.issubset(filter_value)) or value.issuperset(
@@ -586,6 +646,12 @@ def is_valid_resource_id(resource_id):
 
 def is_valid_cidr(cird):
     cidr_pattern = r"^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/(\d|[1-2]\d|3[0-2]))$"
+    cidr_pattern_re = re.compile(cidr_pattern)
+    return cidr_pattern_re.match(cird) is not None
+
+
+def is_valid_ipv6_cidr(cird):
+    cidr_pattern = r"^s*((([0-9A-Fa-f]{1,4}:){7}([0-9A-Fa-f]{1,4}|:))|(([0-9A-Fa-f]{1,4}:){6}(:[0-9A-Fa-f]{1,4}|((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3})|:))|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){1,2})|:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3})|:))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){1,3})|((:[0-9A-Fa-f]{1,4})?:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){1,4})|((:[0-9A-Fa-f]{1,4}){0,2}:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){1,5})|((:[0-9A-Fa-f]{1,4}){0,3}:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){1,6})|((:[0-9A-Fa-f]{1,4}){0,4}:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3}))|:))|(:(((:[0-9A-Fa-f]{1,4}){1,7})|((:[0-9A-Fa-f]{1,4}){0,5}:((25[0-5]|2[0-4]d|1dd|[1-9]?d)(.(25[0-5]|2[0-4]d|1dd|[1-9]?d)){3}))|:)))(%.+)?s*(\/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8]))?$"
     cidr_pattern_re = re.compile(cidr_pattern)
     return cidr_pattern_re.match(cird) is not None
 

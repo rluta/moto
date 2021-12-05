@@ -1,14 +1,20 @@
-from __future__ import unicode_literals
 from datetime import datetime, timedelta
 import json
 import yaml
 import uuid
 
 from boto3 import Session
-
 from collections import OrderedDict
+from yaml.parser import ParserError  # pylint:disable=c-extension-no-member
+from yaml.scanner import ScannerError  # pylint:disable=c-extension-no-member
+
 from moto.core import BaseBackend, BaseModel
-from moto.core.utils import iso_8601_datetime_without_milliseconds
+from moto.core.models import ACCOUNT_ID
+from moto.core.utils import (
+    iso_8601_datetime_with_milliseconds,
+    iso_8601_datetime_without_milliseconds,
+)
+from moto.sns.models import sns_backends
 
 from .parsing import ResourceMap, OutputMap
 from .utils import (
@@ -50,7 +56,11 @@ class FakeStackSet(BaseModel):
         self.stack_instances = self.instances.stack_instances
         self.operations = []
 
-    def _create_operation(self, operation_id, action, status, accounts=[], regions=[]):
+    def _create_operation(
+        self, operation_id, action, status, accounts=None, regions=None
+    ):
+        accounts = accounts or []
+        regions = regions or []
         operation = {
             "OperationId": str(operation_id),
             "Action": action,
@@ -230,11 +240,16 @@ class FakeStack(BaseModel):
         self.role_arn = role_arn
         self.tags = tags if tags else {}
         self.events = []
+        self.policy = ""
 
         self.cross_stack_resources = cross_stack_resources or {}
         self.resource_map = self._create_resource_map()
+
+        self.custom_resources = dict()
+
         self.output_map = self._create_output_map()
         self.creation_time = datetime.utcnow()
+        self.status = "CREATE_PENDING"
 
     def _create_resource_map(self):
         resource_map = ResourceMap(
@@ -250,9 +265,7 @@ class FakeStack(BaseModel):
         return resource_map
 
     def _create_output_map(self):
-        output_map = OutputMap(self.resource_map, self.template_dict, self.stack_id)
-        output_map.create()
-        return output_map
+        return OutputMap(self.resource_map, self.template_dict, self.stack_id)
 
     @property
     def creation_time_iso_8601(self):
@@ -261,18 +274,20 @@ class FakeStack(BaseModel):
     def _add_stack_event(
         self, resource_status, resource_status_reason=None, resource_properties=None
     ):
-        self.events.append(
-            FakeEvent(
-                stack_id=self.stack_id,
-                stack_name=self.name,
-                logical_resource_id=self.name,
-                physical_resource_id=self.stack_id,
-                resource_type="AWS::CloudFormation::Stack",
-                resource_status=resource_status,
-                resource_status_reason=resource_status_reason,
-                resource_properties=resource_properties,
-            )
+
+        event = FakeEvent(
+            stack_id=self.stack_id,
+            stack_name=self.name,
+            logical_resource_id=self.name,
+            physical_resource_id=self.stack_id,
+            resource_type="AWS::CloudFormation::Stack",
+            resource_status=resource_status,
+            resource_status_reason=resource_status_reason,
+            resource_properties=resource_properties,
         )
+
+        event.sendToSns(self.region_name, self.notification_arns)
+        self.events.append(event)
 
     def _add_resource_event(
         self,
@@ -300,7 +315,7 @@ class FakeStack(BaseModel):
         yaml.add_multi_constructor("", yaml_tag_constructor)
         try:
             self.template_dict = yaml.load(self.template, Loader=yaml.Loader)
-        except (yaml.parser.ParserError, yaml.scanner.ScannerError):
+        except (ParserError, ScannerError):
             self.template_dict = json.loads(self.template)
 
     @property
@@ -313,17 +328,33 @@ class FakeStack(BaseModel):
 
     @property
     def stack_outputs(self):
-        return self.output_map.values()
+        return [v for v in self.output_map.values() if v]
 
     @property
     def exports(self):
         return self.output_map.exports
 
+    def add_custom_resource(self, custom_resource):
+        self.custom_resources[custom_resource.logical_id] = custom_resource
+
+    def get_custom_resource(self, custom_resource):
+        return self.custom_resources[custom_resource]
+
     def create_resources(self):
-        self.resource_map.create(self.template_dict)
+        self.status = "CREATE_IN_PROGRESS"
+        all_resources_ready = self.resource_map.create(self.template_dict)
         # Set the description of the stack
         self.description = self.template_dict.get("Description")
+        if all_resources_ready:
+            self.mark_creation_complete()
+
+    def verify_readiness(self):
+        if self.resource_map.creation_complete():
+            self.mark_creation_complete()
+
+    def mark_creation_complete(self):
         self.status = "CREATE_COMPLETE"
+        self._add_stack_event("CREATE_COMPLETE")
 
     def update(self, template, role_arn=None, parameters=None, tags=None):
         self._add_stack_event(
@@ -393,7 +424,7 @@ class FakeChangeSet(BaseModel):
         yaml.add_multi_constructor("", yaml_tag_constructor)
         try:
             self.template_dict = yaml.load(self.template, Loader=yaml.Loader)
-        except (yaml.parser.ParserError, yaml.scanner.ScannerError):
+        except (ParserError, ScannerError):
             self.template_dict = json.loads(self.template)
 
     @property
@@ -431,6 +462,7 @@ class FakeEvent(BaseModel):
         resource_status,
         resource_status_reason=None,
         resource_properties=None,
+        client_request_token=None,
     ):
         self.stack_id = stack_id
         self.stack_name = stack_name
@@ -442,6 +474,37 @@ class FakeEvent(BaseModel):
         self.resource_properties = resource_properties
         self.timestamp = datetime.utcnow()
         self.event_id = uuid.uuid4()
+        self.client_request_token = client_request_token
+
+    def sendToSns(self, region, sns_topic_arns):
+        message = """StackId='{stack_id}'
+Timestamp='{timestamp}'
+EventId='{event_id}'
+LogicalResourceId='{logical_resource_id}'
+Namespace='{account_id}'
+ResourceProperties='{resource_properties}'
+ResourceStatus='{resource_status}'
+ResourceStatusReason='{resource_status_reason}'
+ResourceType='{resource_type}'
+StackName='{stack_name}'
+ClientRequestToken='{client_request_token}'""".format(
+            stack_id=self.stack_id,
+            timestamp=iso_8601_datetime_with_milliseconds(self.timestamp),
+            event_id=self.event_id,
+            logical_resource_id=self.logical_resource_id,
+            account_id=ACCOUNT_ID,
+            resource_properties=self.resource_properties,
+            resource_status=self.resource_status,
+            resource_status_reason=self.resource_status_reason,
+            resource_type=self.resource_type,
+            stack_name=self.stack_name,
+            client_request_token=self.client_request_token,
+        )
+
+        for sns_topic_arn in sns_topic_arns:
+            sns_backends[region].publish(
+                message, subject="AWS CloudFormation Notification", arn=sns_topic_arn
+            )
 
 
 def filter_stacks(all_stacks, status_filter):
@@ -461,6 +524,13 @@ class CloudFormationBackend(BaseBackend):
         self.deleted_stacks = {}
         self.exports = OrderedDict()
         self.change_sets = OrderedDict()
+
+    @staticmethod
+    def default_vpc_endpoint_service(service_region, zones):
+        """Default VPC endpoint service."""
+        return BaseBackend.default_vpc_endpoint_service_factory(
+            service_region, zones, "cloudformation", policy_supported=False
+        )
 
     def _resolve_update_parameters(self, instance, incoming_params):
         parameters = dict(
@@ -586,7 +656,7 @@ class CloudFormationBackend(BaseBackend):
         tags=None,
         role_arn=None,
     ):
-        stack_id = generate_stack_id(name)
+        stack_id = generate_stack_id(name, region_name)
         new_stack = FakeStack(
             stack_id=stack_id,
             name=name,
@@ -606,7 +676,6 @@ class CloudFormationBackend(BaseBackend):
             "CREATE_IN_PROGRESS", resource_status_reason="User Initiated"
         )
         new_stack.create_resources()
-        new_stack._add_stack_event("CREATE_COMPLETE")
         return new_stack
 
     def create_change_set(
@@ -701,24 +770,25 @@ class CloudFormationBackend(BaseBackend):
         if change_set is None:
             raise ValidationError(stack_name)
 
+        stack = self.stacks[change_set.stack_id]
+        # TODO: handle execution errors and implement rollback
         if change_set.change_set_type == "CREATE":
-            change_set.stack._add_stack_event(
+            stack._add_stack_event(
                 "CREATE_IN_PROGRESS", resource_status_reason="User Initiated"
             )
             change_set.apply()
-            change_set.stack._add_stack_event("CREATE_COMPLETE")
+            stack._add_stack_event("CREATE_COMPLETE")
         else:
-            change_set.stack._add_stack_event("UPDATE_IN_PROGRESS")
+            stack._add_stack_event("UPDATE_IN_PROGRESS")
             change_set.apply()
-            change_set.stack._add_stack_event("UPDATE_COMPLETE")
+            stack._add_stack_event("UPDATE_COMPLETE")
 
         # set the execution status of the changeset
         change_set.execution_status = "EXECUTE_COMPLETE"
 
         # set the status of the stack
-        self.stacks[
-            change_set.stack_id
-        ].status = f"{change_set.change_set_type}_COMPLETE"
+        stack.status = f"{change_set.change_set_type}_COMPLETE"
+        stack.template = change_set.template
         return True
 
     def describe_stacks(self, name_or_stack_id):
@@ -764,6 +834,23 @@ class CloudFormationBackend(BaseBackend):
         )
         stack.update(template, role_arn, parameters=resolved_parameters, tags=tags)
         return stack
+
+    def get_stack_policy(self, stack_name):
+        try:
+            stack = self.get_stack(stack_name)
+        except ValidationError:
+            raise ValidationError(message=f"Stack: {stack_name} does not exist")
+        return stack.policy
+
+    def set_stack_policy(self, stack_name, policy_body):
+        """
+        Note that Moto does no validation/parsing/enforcement of this policy - we simply persist it.
+        """
+        try:
+            stack = self.get_stack(stack_name)
+        except ValidationError:
+            raise ValidationError(message=f"Stack: {stack_name} does not exist")
+        stack.policy = policy_body
 
     def list_stack_resources(self, stack_name_or_id):
         stack = self.get_stack(stack_name_or_id)

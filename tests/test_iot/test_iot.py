@@ -1,10 +1,8 @@
-from __future__ import unicode_literals
-
 import json
-import sure  # noqa
+import sure  # noqa # pylint: disable=unused-import
 import boto3
 
-from moto import mock_iot
+from moto import mock_iot, mock_cognitoidentity
 from botocore.exceptions import ClientError
 import pytest
 
@@ -55,6 +53,31 @@ def test_attach_policy():
     res = client.list_attached_policies(target=cert_arn)
     res.should.have.key("policies").which.should.have.length_of(1)
     res["policies"][0]["policyName"].should.equal("my-policy")
+
+
+@mock_iot
+@mock_cognitoidentity
+def test_attach_policy_to_identity():
+    region = "ap-northeast-1"
+
+    cognito_identity_client = boto3.client("cognito-identity", region_name=region)
+    identity_pool_name = "test_identity_pool"
+    identity_pool = cognito_identity_client.create_identity_pool(
+        IdentityPoolName=identity_pool_name, AllowUnauthenticatedIdentities=True
+    )
+    identity = cognito_identity_client.get_id(
+        AccountId="test", IdentityPoolId=identity_pool["IdentityPoolId"]
+    )
+
+    client = boto3.client("iot", region_name=region)
+    policy_name = "my-policy"
+    doc = "{}"
+    client.create_policy(policyName=policy_name, policyDocument=doc)
+    client.attach_policy(policyName=policy_name, target=identity["IdentityId"])
+
+    res = client.list_attached_policies(target=identity["IdentityId"])
+    res.should.have.key("policies").which.should.have.length_of(1)
+    res["policies"][0]["policyName"].should.equal(policy_name)
 
 
 @mock_iot
@@ -890,7 +913,7 @@ def test_principal_policy_deprecated():
 def test_principal_thing():
     client = boto3.client("iot", region_name="ap-northeast-1")
     thing_name = "my-thing"
-    thing = client.create_thing(thingName=thing_name)
+    client.create_thing(thingName=thing_name)
     cert = client.create_keys_and_certificate(setAsActive=True)
     cert_arn = cert["certificateArn"]
 
@@ -923,7 +946,7 @@ def test_principal_thing():
 def test_delete_principal_thing():
     client = boto3.client("iot", region_name="ap-northeast-1")
     thing_name = "my-thing"
-    thing = client.create_thing(thingName=thing_name)
+    client.create_thing(thingName=thing_name)
     cert = client.create_keys_and_certificate(setAsActive=True)
     cert_arn = cert["certificateArn"]
     cert_id = cert["certificateId"]
@@ -959,7 +982,7 @@ class TestListThingGroup:
     def test_should_list_all_groups(self):
         # setup
         client = boto3.client("iot", region_name="ap-northeast-1")
-        group_catalog = generate_thing_group_tree(client, self.tree_dict)
+        generate_thing_group_tree(client, self.tree_dict)
         # test
         resp = client.list_thing_groups()
         resp.should.have.key("thingGroups")
@@ -969,7 +992,7 @@ class TestListThingGroup:
     def test_should_list_all_groups_non_recursively(self):
         # setup
         client = boto3.client("iot", region_name="ap-northeast-1")
-        group_catalog = generate_thing_group_tree(client, self.tree_dict)
+        generate_thing_group_tree(client, self.tree_dict)
         # test
         resp = client.list_thing_groups(recursive=False)
         resp.should.have.key("thingGroups")
@@ -979,7 +1002,7 @@ class TestListThingGroup:
     def test_should_list_all_groups_filtered_by_parent(self):
         # setup
         client = boto3.client("iot", region_name="ap-northeast-1")
-        group_catalog = generate_thing_group_tree(client, self.tree_dict)
+        generate_thing_group_tree(client, self.tree_dict)
         # test
         resp = client.list_thing_groups(parentGroup=self.group_name_1a)
         resp.should.have.key("thingGroups")
@@ -998,7 +1021,7 @@ class TestListThingGroup:
     def test_should_list_all_groups_filtered_by_parent_non_recursively(self):
         # setup
         client = boto3.client("iot", region_name="ap-northeast-1")
-        group_catalog = generate_thing_group_tree(client, self.tree_dict)
+        generate_thing_group_tree(client, self.tree_dict)
         # test
         resp = client.list_thing_groups(parentGroup=self.group_name_1a, recursive=False)
         resp.should.have.key("thingGroups")
@@ -1011,7 +1034,7 @@ class TestListThingGroup:
     def test_should_list_all_groups_filtered_by_name_prefix(self):
         # setup
         client = boto3.client("iot", region_name="ap-northeast-1")
-        group_catalog = generate_thing_group_tree(client, self.tree_dict)
+        generate_thing_group_tree(client, self.tree_dict)
         # test
         resp = client.list_thing_groups(namePrefixFilter="my-group-name-1")
         resp.should.have.key("thingGroups")
@@ -1027,7 +1050,7 @@ class TestListThingGroup:
     def test_should_list_all_groups_filtered_by_name_prefix_non_recursively(self):
         # setup
         client = boto3.client("iot", region_name="ap-northeast-1")
-        group_catalog = generate_thing_group_tree(client, self.tree_dict)
+        generate_thing_group_tree(client, self.tree_dict)
         # test
         resp = client.list_thing_groups(
             namePrefixFilter="my-group-name-1", recursive=False
@@ -1044,7 +1067,7 @@ class TestListThingGroup:
     def test_should_list_all_groups_filtered_by_name_prefix_and_parent(self):
         # setup
         client = boto3.client("iot", region_name="ap-northeast-1")
-        group_catalog = generate_thing_group_tree(client, self.tree_dict)
+        generate_thing_group_tree(client, self.tree_dict)
         # test
         resp = client.list_thing_groups(
             namePrefixFilter="my-group-name-2", parentGroup=self.group_name_1a
@@ -1072,7 +1095,7 @@ def test_delete_thing_group():
     tree_dict = {
         group_name_1a: {group_name_2a: {},},
     }
-    group_catalog = generate_thing_group_tree(client, tree_dict)
+    generate_thing_group_tree(client, tree_dict)
 
     # delete group with child
     try:
@@ -2011,6 +2034,12 @@ def test_list_job_executions_for_job():
         "thingArn"
     ).which.should.equal(thing["thingArn"])
 
+    job_execution = client.list_job_executions_for_job(jobId=job_id, status="QUEUED")
+    job_execution.should.have.key("executionSummaries")
+    job_execution["executionSummaries"][0].should.have.key(
+        "thingArn"
+    ).which.should.equal(thing["thingArn"])
+
 
 @mock_iot
 def test_list_job_executions_for_thing():
@@ -2047,6 +2076,47 @@ def test_list_job_executions_for_thing():
     job_execution["executionSummaries"][0].should.have.key("jobId").which.should.equal(
         job_id
     )
+
+    job_execution = client.list_job_executions_for_thing(
+        thingName=name, status="QUEUED"
+    )
+    job_execution.should.have.key("executionSummaries")
+    job_execution["executionSummaries"][0].should.have.key("jobId").which.should.equal(
+        job_id
+    )
+
+
+@mock_iot
+def test_list_job_executions_for_thing_paginated():
+    client = boto3.client("iot", region_name="eu-west-1")
+    name = "my-thing"
+    thing = client.create_thing(thingName=name)
+
+    for idx in range(0, 10):
+        client.create_job(
+            jobId=f"TestJob_{idx}",
+            targets=[thing["thingArn"]],
+            document=json.dumps({"field": "value"}),
+        )
+
+    res = client.list_job_executions_for_thing(thingName=name, maxResults=2)
+    executions = res["executionSummaries"]
+    executions.should.have.length_of(2)
+    res.should.have.key("nextToken")
+
+    res = client.list_job_executions_for_thing(
+        thingName=name, maxResults=1, nextToken=res["nextToken"]
+    )
+    executions = res["executionSummaries"]
+    executions.should.have.length_of(1)
+    res.should.have.key("nextToken")
+
+    res = client.list_job_executions_for_thing(
+        thingName=name, nextToken=res["nextToken"]
+    )
+    executions = res["executionSummaries"]
+    executions.should.have.length_of(7)
+    res.shouldnt.have.key("nextToken")
 
 
 class TestTopicRules:
