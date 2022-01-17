@@ -1,10 +1,12 @@
 import uuid
 
-from boto3 import Session
+from datetime import datetime, timedelta
 
 from moto import core as moto_core
 from moto.core import BaseBackend, BaseModel
-from moto.core.utils import unix_time_millis
+from moto.core.models import CloudFormationModel
+from moto.core.utils import unix_time_millis, BackendDict
+from moto.utilities.paginator import paginate
 from moto.logs.metric_filters import MetricFilters
 from moto.logs.exceptions import (
     ResourceNotFoundException,
@@ -12,6 +14,7 @@ from moto.logs.exceptions import (
     InvalidParameterException,
     LimitExceededException,
 )
+from .utils import PAGINATION_MODEL
 
 MAX_RESOURCE_POLICIES_PER_REGION = 10
 
@@ -273,7 +276,7 @@ class LogStream(BaseModel):
         return events
 
 
-class LogGroup(BaseModel):
+class LogGroup(CloudFormationModel):
     def __init__(self, region, name, tags, **kwargs):
         self.name = name
         self.region = region
@@ -291,6 +294,25 @@ class LogGroup(BaseModel):
         # https://docs.aws.amazon.com/AmazonCloudWatchLogs/latest/APIReference/API_CreateLogGroup.html
         self.kms_key_id = kwargs.get("kmsKeyId")
 
+    @staticmethod
+    def cloudformation_name_type():
+        return "LogGroupName"
+
+    @staticmethod
+    def cloudformation_type():
+        # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-logs-loggroup.html
+        return "AWS::Logs::LogGroup"
+
+    @classmethod
+    def create_from_cloudformation_json(
+        cls, resource_name, cloudformation_json, region_name, **kwargs
+    ):
+        properties = cloudformation_json["Properties"]
+        tags = properties.get("Tags", {})
+        return logs_backends[region_name].create_log_group(
+            resource_name, tags, **properties
+        )
+
     def create_log_stream(self, log_stream_name):
         if log_stream_name in self.streams:
             raise ResourceAlreadyExistsException()
@@ -306,11 +328,11 @@ class LogGroup(BaseModel):
     def describe_log_streams(
         self,
         descending,
-        limit,
         log_group_name,
         log_stream_name_prefix,
-        next_token,
         order_by,
+        next_token=None,
+        limit=None,
     ):
         # responses only log_stream_name, creation_time, arn, stored_bytes when no events are stored.
 
@@ -323,7 +345,7 @@ class LogGroup(BaseModel):
         def sorter(item):
             return (
                 item[0]
-                if order_by == "logStreamName"
+                if order_by == "LogStreamName"
                 else item[1].get("lastEventTimestamp", 0)
             )
 
@@ -538,6 +560,72 @@ class LogGroup(BaseModel):
         self.subscription_filters = []
 
 
+class LogResourcePolicy(CloudFormationModel):
+    def __init__(self, policy_name, policy_document):
+        self.policy_name = policy_name
+        self.policy_document = policy_document
+        self.last_updated_time = int(unix_time_millis())
+
+    def update(self, policy_document):
+        self.policy_document = policy_document
+        self.last_updated_time = int(unix_time_millis())
+
+    def describe(self):
+        return {
+            "policyName": self.policy_name,
+            "policyDocument": self.policy_document,
+            "lastUpdatedTime": self.last_updated_time,
+        }
+
+    @property
+    def physical_resource_id(self):
+        return self.policy_name
+
+    @staticmethod
+    def cloudformation_name_type():
+        return "PolicyName"
+
+    @staticmethod
+    def cloudformation_type():
+        # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-logs-resourcepolicy.html
+        return "AWS::Logs::ResourcePolicy"
+
+    @classmethod
+    def create_from_cloudformation_json(
+        cls, resource_name, cloudformation_json, region_name, **kwargs
+    ):
+        properties = cloudformation_json["Properties"]
+        policy_name = properties["PolicyName"]
+        policy_document = properties["PolicyDocument"]
+        return logs_backends[region_name].put_resource_policy(
+            policy_name, policy_document
+        )
+
+    @classmethod
+    def update_from_cloudformation_json(
+        cls, original_resource, new_resource_name, cloudformation_json, region_name
+    ):
+        properties = cloudformation_json["Properties"]
+        policy_name = properties["PolicyName"]
+        policy_document = properties["PolicyDocument"]
+
+        updated = logs_backends[region_name].put_resource_policy(
+            policy_name, policy_document
+        )
+        # TODO: move `update by replacement logic` to cloudformation. this is required for implementing rollbacks
+        if original_resource.policy_name != policy_name:
+            logs_backends[region_name].delete_resource_policy(
+                original_resource.policy_name
+            )
+        return updated
+
+    @classmethod
+    def delete_from_cloudformation_json(
+        cls, resource_name, cloudformation_json, region_name
+    ):
+        return logs_backends[region_name].delete_resource_policy(resource_name)
+
+
 class LogsBackend(BaseBackend):
     def __init__(self, region_name):
         self.region_name = region_name
@@ -550,6 +638,13 @@ class LogsBackend(BaseBackend):
         region_name = self.region_name
         self.__dict__ = {}
         self.__init__(region_name)
+
+    @staticmethod
+    def default_vpc_endpoint_service(service_region, zones):
+        """Default VPC endpoint service."""
+        return BaseBackend.default_vpc_endpoint_service_factory(
+            service_region, zones, "logs"
+        )
 
     def create_log_group(self, log_group_name, tags, **kwargs):
         if log_group_name in self.groups:
@@ -575,13 +670,8 @@ class LogsBackend(BaseBackend):
             raise ResourceNotFoundException()
         del self.groups[log_group_name]
 
-    def describe_log_groups(self, limit, log_group_name_prefix, next_token):
-        if limit > 50:
-            raise InvalidParameterException(
-                constraint="Member must have value less than or equal to 50",
-                parameter="limit",
-                value=limit,
-            )
+    @paginate(pagination_model=PAGINATION_MODEL)
+    def describe_log_groups(self, log_group_name_prefix=None):
         if log_group_name_prefix is None:
             log_group_name_prefix = ""
 
@@ -592,33 +682,7 @@ class LogsBackend(BaseBackend):
         ]
         groups = sorted(groups, key=lambda x: x["logGroupName"])
 
-        index_start = 0
-        if next_token:
-            try:
-                index_start = (
-                    next(
-                        index
-                        for (index, d) in enumerate(groups)
-                        if d["logGroupName"] == next_token
-                    )
-                    + 1
-                )
-            except StopIteration:
-                index_start = 0
-                # AWS returns an empty list if it receives an invalid token.
-                groups = []
-
-        index_end = index_start + limit
-        if index_end > len(groups):
-            index_end = len(groups)
-
-        groups_page = groups[index_start:index_end]
-
-        next_token = None
-        if groups_page and index_end < len(groups):
-            next_token = groups_page[-1]["logGroupName"]
-
-        return groups_page, next_token
+        return groups
 
     def create_log_stream(self, log_group_name, log_stream_name):
         if log_group_name not in self.groups:
@@ -661,12 +725,12 @@ class LogsBackend(BaseBackend):
             )
         log_group = self.groups[log_group_name]
         return log_group.describe_log_streams(
-            descending,
-            limit,
-            log_group_name,
-            log_stream_name_prefix,
-            next_token,
-            order_by,
+            descending=descending,
+            limit=limit,
+            log_group_name=log_group_name,
+            log_stream_name_prefix=log_stream_name_prefix,
+            next_token=next_token,
+            order_by=order_by,
         )
 
     def put_log_events(
@@ -676,9 +740,30 @@ class LogsBackend(BaseBackend):
         if log_group_name not in self.groups:
             raise ResourceNotFoundException()
         log_group = self.groups[log_group_name]
-        return log_group.put_log_events(
-            log_group_name, log_stream_name, log_events, sequence_token
+
+        # Only events from the last 14 days or 2 hours in the future are accepted
+        rejected_info = {}
+        allowed_events = []
+        last_timestamp = None
+        oldest = int(unix_time_millis(datetime.utcnow() - timedelta(days=14)))
+        newest = int(unix_time_millis(datetime.utcnow() + timedelta(hours=2)))
+        for idx, event in enumerate(log_events):
+            if last_timestamp and last_timestamp > event["timestamp"]:
+                raise InvalidParameterException(
+                    "Log events in a single PutLogEvents request must be in chronological order."
+                )
+            if event["timestamp"] < oldest:
+                rejected_info["tooOldLogEventEndIndex"] = idx
+            elif event["timestamp"] > newest:
+                rejected_info["tooNewLogEventStartIndex"] = idx
+            else:
+                allowed_events.append(event)
+            last_timestamp = event["timestamp"]
+
+        token = log_group.put_log_events(
+            log_group_name, log_stream_name, allowed_events, sequence_token
         )
+        return token, rejected_info
 
     def get_log_events(
         self,
@@ -763,29 +848,19 @@ class LogsBackend(BaseBackend):
         """
         limit = limit or MAX_RESOURCE_POLICIES_PER_REGION
 
-        policies = []
-        for policy_name, policy_info in self.resource_policies.items():
-            policies.append(
-                {
-                    "policyName": policy_name,
-                    "policyDocument": policy_info["policyDocument"],
-                    "lastUpdatedTime": policy_info["lastUpdatedTime"],
-                }
-            )
-        return policies
+        return list(self.resource_policies.values())
 
     def put_resource_policy(self, policy_name, policy_doc):
-        """Create resource policy and return dict of policy name and doc."""
+        """Creates/updates resource policy and return policy object"""
+        if policy_name in self.resource_policies:
+            policy = self.resource_policies[policy_name]
+            policy.update(policy_doc)
+            return policy
         if len(self.resource_policies) == MAX_RESOURCE_POLICIES_PER_REGION:
             raise LimitExceededException()
-
-        policy = {
-            "policyName": policy_name,
-            "policyDocument": policy_doc,
-            "lastUpdatedTime": int(unix_time_millis()),
-        }
+        policy = LogResourcePolicy(policy_name, policy_doc)
         self.resource_policies[policy_name] = policy
-        return {"resourcePolicy": policy}
+        return policy
 
     def delete_resource_policy(self, policy_name):
         """Remove resource policy with a policy name matching given name."""
@@ -908,14 +983,4 @@ class LogsBackend(BaseBackend):
         return query_id
 
 
-logs_backends = {}
-for available_region in Session().get_available_regions("logs"):
-    logs_backends[available_region] = LogsBackend(available_region)
-for available_region in Session().get_available_regions(
-    "logs", partition_name="aws-us-gov"
-):
-    logs_backends[available_region] = LogsBackend(available_region)
-for available_region in Session().get_available_regions(
-    "logs", partition_name="aws-cn"
-):
-    logs_backends[available_region] = LogsBackend(available_region)
+logs_backends = BackendDict(LogsBackend, "logs")

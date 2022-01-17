@@ -1,10 +1,8 @@
-from __future__ import unicode_literals
-
 import string
 
 import boto3
 import botocore.exceptions
-import sure  # noqa
+import sure  # noqa # pylint: disable=unused-import
 import datetime
 import uuid
 
@@ -227,6 +225,14 @@ def test_get_parameters_by_path():
         "Valid filter keys include: [Type, KeyId].",
     )
 
+    # Label filter in get_parameters_by_path
+    client.label_parameter_version(Name="/foo/name2", Labels=["Label1"])
+
+    filters = [{"Key": "Label", "Values": ["Label1"]}]
+    response = client.get_parameters_by_path(Path="/foo", ParameterFilters=filters)
+    len(response["Parameters"]).should.equal(1)
+    {p["Name"] for p in response["Parameters"]}.should.equal(set(["/foo/name2"]))
+
 
 @pytest.mark.parametrize("name", ["test", "my-cool-parameter"])
 @mock_ssm
@@ -279,6 +285,19 @@ def test_put_parameter(name):
         "arn:aws:ssm:us-east-1:{}:parameter/{}".format(ACCOUNT_ID, name)
     )
     new_data_type = "aws:ec2:image"
+
+    with pytest.raises(ClientError) as ex:
+        response = client.put_parameter(
+            Name=name,
+            Description="desc 3",
+            Value="value 3",
+            Type="String",
+            Overwrite=True,
+            Tags=[{"Key": "foo", "Value": "bar"}],
+            DataType=new_data_type,
+        )
+    assert ex.value.response["Error"]["Code"] == "ValidationException"
+
     response = client.put_parameter(
         Name=name,
         Description="desc 3",
@@ -1040,7 +1059,7 @@ def test_describe_parameters_tags():
 
 
 @mock_ssm
-def test_tags_in_list_tags_from_resource():
+def test_tags_in_list_tags_from_resource_parameter():
     client = boto3.client("ssm", region_name="us-east-1")
 
     client.put_parameter(
@@ -1053,8 +1072,31 @@ def test_tags_in_list_tags_from_resource():
     tags = client.list_tags_for_resource(
         ResourceId="/spam/eggs", ResourceType="Parameter"
     )
-
     assert tags.get("TagList") == [{"Key": "spam", "Value": "eggs"}]
+
+    client.delete_parameter(Name="/spam/eggs")
+
+    with pytest.raises(ClientError) as ex:
+        client.list_tags_for_resource(ResourceType="Parameter", ResourceId="/spam/eggs")
+    assert ex.value.response["Error"]["Code"] == "InvalidResourceId"
+
+
+@mock_ssm
+def test_tags_invalid_resource_id():
+    client = boto3.client("ssm", region_name="us-east-1")
+
+    with pytest.raises(ClientError) as ex:
+        client.list_tags_for_resource(ResourceType="Parameter", ResourceId="bar")
+    assert ex.value.response["Error"]["Code"] == "InvalidResourceId"
+
+
+@mock_ssm
+def test_tags_invalid_resource_type():
+    client = boto3.client("ssm", region_name="us-east-1")
+
+    with pytest.raises(ClientError) as ex:
+        client.list_tags_for_resource(ResourceType="foo", ResourceId="bar")
+    assert ex.value.response["Error"]["Code"] == "InvalidResourceType"
 
 
 @mock_ssm
@@ -1619,12 +1661,21 @@ def test_get_parameter_history_missing_parameter():
 def test_add_remove_list_tags_for_resource():
     client = boto3.client("ssm", region_name="us-east-1")
 
+    with pytest.raises(ClientError) as ce:
+        client.add_tags_to_resource(
+            ResourceId="test",
+            ResourceType="Parameter",
+            Tags=[{"Key": "test-key", "Value": "test-value"}],
+        )
+    assert ce.value.response["Error"]["Code"] == "InvalidResourceId"
+
+    client.put_parameter(Name="test", Value="value", Type="String")
+
     client.add_tags_to_resource(
         ResourceId="test",
         ResourceType="Parameter",
         Tags=[{"Key": "test-key", "Value": "test-value"}],
     )
-
     response = client.list_tags_for_resource(
         ResourceId="test", ResourceType="Parameter"
     )

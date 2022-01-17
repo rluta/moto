@@ -1,4 +1,3 @@
-from __future__ import unicode_literals
 from moto.core.responses import BaseResponse
 from moto.ec2.utils import filters_from_querystring
 
@@ -29,8 +28,11 @@ class SpotInstances(BaseResponse):
         )
 
     def describe_spot_instance_requests(self):
+        spot_instance_ids = self._get_multi_param("SpotInstanceRequestId")
         filters = filters_from_querystring(self.querystring)
-        requests = self.ec2_backend.describe_spot_instance_requests(filters=filters)
+        requests = self.ec2_backend.describe_spot_instance_requests(
+            filters=filters, spot_instance_ids=spot_instance_ids
+        )
         template = self.response_template(DESCRIBE_SPOT_INSTANCES_TEMPLATE)
         return template.render(requests=requests)
 
@@ -47,7 +49,7 @@ class SpotInstances(BaseResponse):
         price = self._get_param("SpotPrice")
         image_id = self._get_param("LaunchSpecification.ImageId")
         count = self._get_int_param("InstanceCount", 1)
-        type = self._get_param("Type", "one-time")
+        spot_instance_type = self._get_param("Type", "one-time")
         valid_from = self._get_param("ValidFrom")
         valid_until = self._get_param("ValidUntil")
         launch_group = self._get_param("LaunchGroup")
@@ -67,7 +69,7 @@ class SpotInstances(BaseResponse):
                 price=price,
                 image_id=image_id,
                 count=count,
-                type=type,
+                spot_instance_type=spot_instance_type,
                 valid_from=valid_from,
                 valid_until=valid_until,
                 launch_group=launch_group,

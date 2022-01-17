@@ -1,9 +1,8 @@
-from __future__ import unicode_literals
 from .responses import APIGatewayResponse
 
 response = APIGatewayResponse()
 
-url_bases = ["https?://apigateway.(.+).amazonaws.com"]
+url_bases = [r"https?://apigateway\.(.+)\.amazonaws.com"]
 
 url_paths = {
     "{0}/restapis$": response.restapis,
@@ -28,7 +27,11 @@ url_paths = {
     "{0}/restapis/(?P<function_id>[^/]+)/models$": response.models,
     "{0}/restapis/(?P<function_id>[^/]+)/models/(?P<model_name>[^/]+)/?$": response.model_induvidual,
     "{0}/domainnames/(?P<domain_name>[^/]+)/?$": response.domain_name_induvidual,
+    "{0}/domainnames/(?P<domain_name>[^/]+)/basepathmappings$": response.base_path_mappings,
+    "{0}/domainnames/(?P<domain_name>[^/]+)/basepathmappings/(?P<base_path_mapping>[^/]+)$": response.base_path_mapping_individual,
     "{0}/usageplans/(?P<usage_plan_id>[^/]+)/?$": response.usage_plan_individual,
     "{0}/usageplans/(?P<usage_plan_id>[^/]+)/keys$": response.usage_plan_keys,
     "{0}/usageplans/(?P<usage_plan_id>[^/]+)/keys/(?P<api_key_id>[^/]+)/?$": response.usage_plan_key_individual,
+    "{0}/restapis/(?P<function_id>[^/]+)/requestvalidators$": response.request_validators,
+    "{0}/restapis/(?P<api_id>[^/]+)/requestvalidators/(?P<validator_id>[^/]+)/?$": response.request_validator_individual,
 }

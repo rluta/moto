@@ -1,9 +1,7 @@
-from __future__ import unicode_literals
-
 from moto.autoscaling import autoscaling_backends
 from moto.core.responses import BaseResponse
 from moto.core.utils import camelcase_to_underscores
-from moto.ec2.exceptions import MissingParameterError
+from moto.ec2.exceptions import MissingParameterError, InvalidParameterCombination
 from moto.ec2.utils import (
     filters_from_querystring,
     dict_from_querystring,
@@ -16,6 +14,7 @@ from copy import deepcopy
 
 class InstanceResponse(BaseResponse):
     def describe_instances(self):
+        self.error_on_dryrun()
         filter_dict = filters_from_querystring(self.querystring)
         instance_ids = self._get_multi_param("InstanceId")
         token = self._get_param("NextToken")
@@ -69,7 +68,12 @@ class InstanceResponse(BaseResponse):
             "instance_initiated_shutdown_behavior": self._get_param(
                 "InstanceInitiatedShutdownBehavior"
             ),
+            "launch_template": self._get_multi_param_dict("LaunchTemplate"),
         }
+        if len(kwargs["nics"]) and kwargs["subnet_id"]:
+            raise InvalidParameterCombination(
+                msg="Network interfaces and an instance-level subnet ID may not be specified on the same request"
+            )
 
         mappings = self._parse_block_device_mapping()
         if mappings:
@@ -280,7 +284,7 @@ class InstanceResponse(BaseResponse):
 
     def _security_grp_instance_attribute_handler(self):
         new_security_grp_list = []
-        for key, value in self.querystring.items():
+        for key in self.querystring:
             if "GroupId." in key:
                 new_security_grp_list.append(self.querystring.get(key)[0])
 
@@ -386,7 +390,9 @@ EC2_RUN_INSTANCES = (
           <amiLaunchIndex>{{ instance.ami_launch_index }}</amiLaunchIndex>
           <instanceType>{{ instance.instance_type }}</instanceType>
           <launchTime>{{ instance.launch_time }}</launchTime>
+          {% if instance.lifecycle %}
           <instanceLifecycle>{{ instance.lifecycle }}</instanceLifecycle>
+          {% endif %}
           <placement>
             <availabilityZone>{{ instance.placement}}</availabilityZone>
             <groupName/>
@@ -538,7 +544,9 @@ EC2_DESCRIBE_INSTANCES = (
                     <productCodes/>
                     <instanceType>{{ instance.instance_type }}</instanceType>
                     <launchTime>{{ instance.launch_time }}</launchTime>
+                    {% if instance.lifecycle %}
                     <instanceLifecycle>{{ instance.lifecycle }}</instanceLifecycle>
+                    {% endif %}
                     <placement>
                       <availabilityZone>{{ instance.placement }}</availabilityZone>
                       <groupName/>

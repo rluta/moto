@@ -1,15 +1,12 @@
-# -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
 import time
 import json
 import uuid
 import datetime
 
-from boto3 import Session
 from typing import List, Tuple
 
 from moto.core import BaseBackend, BaseModel
+from moto.core.utils import BackendDict
 from .exceptions import (
     SecretNotFoundException,
     SecretHasNoValueException,
@@ -20,11 +17,11 @@ from .exceptions import (
     ClientError,
 )
 from .utils import random_password, secret_arn, get_secret_name_from_arn
-from .list_secrets.filters import all, tag_key, tag_value, description, name
+from .list_secrets.filters import filter_all, tag_key, tag_value, description, name
 
 
 _filter_functions = {
-    "all": all,
+    "all": filter_all,
     "name": name,
     "description": description,
     "tag-key": tag_key,
@@ -60,7 +57,7 @@ class FakeSecret:
         secret_string=None,
         secret_binary=None,
         description=None,
-        tags=[],
+        tags=None,
         kms_key_id=None,
         version_id=None,
         version_stages=None,
@@ -71,7 +68,7 @@ class FakeSecret:
         self.secret_string = secret_string
         self.secret_binary = secret_binary
         self.description = description
-        self.tags = tags
+        self.tags = tags or []
         self.kms_key_id = kms_key_id
         self.version_id = version_id
         self.version_stages = version_stages
@@ -80,9 +77,9 @@ class FakeSecret:
         self.auto_rotate_after_days = 0
         self.deleted_date = None
 
-    def update(self, description=None, tags=[], kms_key_id=None):
+    def update(self, description=None, tags=None, kms_key_id=None):
         self.description = description
-        self.tags = tags
+        self.tags = tags or []
 
         if kms_key_id is not None:
             self.kms_key_id = kms_key_id
@@ -156,11 +153,11 @@ class FakeSecret:
 class SecretsStore(dict):
     def __setitem__(self, key, value):
         new_key = get_secret_name_from_arn(key)
-        super(SecretsStore, self).__setitem__(new_key, value)
+        super().__setitem__(new_key, value)
 
     def __getitem__(self, key):
         new_key = get_secret_name_from_arn(key)
-        return super(SecretsStore, self).__getitem__(new_key)
+        return super().__getitem__(new_key)
 
     def __contains__(self, key):
         new_key = get_secret_name_from_arn(key)
@@ -168,12 +165,12 @@ class SecretsStore(dict):
 
     def pop(self, key, *args, **kwargs):
         new_key = get_secret_name_from_arn(key)
-        return super(SecretsStore, self).pop(new_key, *args, **kwargs)
+        return super().pop(new_key, *args, **kwargs)
 
 
 class SecretsManagerBackend(BaseBackend):
     def __init__(self, region_name=None, **kwargs):
-        super(SecretsManagerBackend, self).__init__()
+        super().__init__()
         self.region = region_name
         self.secrets = SecretsStore()
 
@@ -182,12 +179,25 @@ class SecretsManagerBackend(BaseBackend):
         self.__dict__ = {}
         self.__init__(region_name)
 
+    @staticmethod
+    def default_vpc_endpoint_service(service_region, zones):
+        """Default VPC endpoint services."""
+        return BaseBackend.default_vpc_endpoint_service_factory(
+            service_region, zones, "secretsmanager"
+        )
+
     def _is_valid_identifier(self, identifier):
         return identifier in self.secrets
 
     def _unix_time_secs(self, dt):
         epoch = datetime.datetime.utcfromtimestamp(0)
         return (dt - epoch).total_seconds()
+
+    def _client_request_token_validator(self, client_request_token):
+        token_length = len(client_request_token)
+        if token_length < 32 or token_length > 64:
+            msg = "ClientRequestToken must be 32-64 characters long."
+            raise InvalidParameterException(msg)
 
     def get_secret_value(self, secret_id, version_id, version_stage):
         if not self._is_valid_identifier(secret_id):
@@ -251,12 +261,13 @@ class SecretsManagerBackend(BaseBackend):
         secret_id,
         secret_string=None,
         secret_binary=None,
+        client_request_token=None,
         kms_key_id=None,
         **kwargs
     ):
 
         # error if secret does not exist
-        if secret_id not in self.secrets.keys():
+        if secret_id not in self.secrets:
             raise SecretNotFoundException()
 
         if self.secrets[secret_id].is_deleted():
@@ -274,6 +285,7 @@ class SecretsManagerBackend(BaseBackend):
             secret_string=secret_string,
             secret_binary=secret_binary,
             description=description,
+            version_id=client_request_token,
             tags=tags,
             kms_key_id=kms_key_id,
         )
@@ -286,7 +298,7 @@ class SecretsManagerBackend(BaseBackend):
         secret_string=None,
         secret_binary=None,
         description=None,
-        tags=[],
+        tags=None,
         kms_key_id=None,
     ):
 
@@ -313,7 +325,7 @@ class SecretsManagerBackend(BaseBackend):
         secret_string=None,
         secret_binary=None,
         description=None,
-        tags=[],
+        tags=None,
         kms_key_id=None,
         version_id=None,
         version_stages=None,
@@ -322,7 +334,9 @@ class SecretsManagerBackend(BaseBackend):
         if version_stages is None:
             version_stages = ["AWSCURRENT"]
 
-        if not version_id:
+        if version_id:
+            self._client_request_token_validator(version_id)
+        else:
             version_id = str(uuid.uuid4())
 
         secret_version = {
@@ -416,12 +430,6 @@ class SecretsManagerBackend(BaseBackend):
                 perform the operation on a secret that's currently marked deleted."
             )
 
-        if client_request_token:
-            token_length = len(client_request_token)
-            if token_length < 32 or token_length > 64:
-                msg = "ClientRequestToken " "must be 32-64 characters long."
-                raise InvalidParameterException(msg)
-
         if rotation_lambda_arn:
             if len(rotation_lambda_arn) > 2048:
                 msg = "RotationLambdaARN " "must <= 2048 characters long."
@@ -463,7 +471,12 @@ class SecretsManagerBackend(BaseBackend):
             pass
 
         old_secret_version = secret.versions[secret.default_version_id]
-        new_version_id = client_request_token or str(uuid.uuid4())
+
+        if client_request_token:
+            self._client_request_token_validator(client_request_token)
+            new_version_id = client_request_token
+        else:
+            new_version_id = str(uuid.uuid4())
 
         # We add the new secret version as "pending". The previous version remains
         # as "current" for now. Once we've passed the new secret through the lambda
@@ -685,7 +698,7 @@ class SecretsManagerBackend(BaseBackend):
 
     def tag_resource(self, secret_id, tags):
 
-        if secret_id not in self.secrets.keys():
+        if secret_id not in self.secrets:
             raise SecretNotFoundException()
 
         secret = self.secrets[secret_id]
@@ -698,7 +711,7 @@ class SecretsManagerBackend(BaseBackend):
 
     def untag_resource(self, secret_id, tag_keys):
 
-        if secret_id not in self.secrets.keys():
+        if secret_id not in self.secrets:
             raise SecretNotFoundException()
 
         secret = self.secrets[secret_id]
@@ -713,7 +726,7 @@ class SecretsManagerBackend(BaseBackend):
     def update_secret_version_stage(
         self, secret_id, version_stage, remove_from_version_id, move_to_version_id
     ):
-        if secret_id not in self.secrets.keys():
+        if secret_id not in self.secrets:
             raise SecretNotFoundException()
 
         secret = self.secrets[secret_id]
@@ -783,14 +796,4 @@ class SecretsManagerBackend(BaseBackend):
         )
 
 
-secretsmanager_backends = {}
-for region in Session().get_available_regions("secretsmanager"):
-    secretsmanager_backends[region] = SecretsManagerBackend(region_name=region)
-for region in Session().get_available_regions(
-    "secretsmanager", partition_name="aws-us-gov"
-):
-    secretsmanager_backends[region] = SecretsManagerBackend(region_name=region)
-for region in Session().get_available_regions(
-    "secretsmanager", partition_name="aws-cn"
-):
-    secretsmanager_backends[region] = SecretsManagerBackend(region_name=region)
+secretsmanager_backends = BackendDict(SecretsManagerBackend, "secretsmanager")

@@ -110,15 +110,15 @@ class LogsResponse(BaseResponse):
 
         if metric_name and not metric_namespace:
             raise InvalidParameterException(
-                constraint=f"If you include the metricName parameter in your request, "
-                f"you must also include the metricNamespace parameter.",
+                constraint=f'{"If you include the metricName parameter in your request, "}'
+                f'{"you must also include the metricNamespace parameter."}',
                 parameter="metricNamespace",
                 value=metric_namespace,
             )
         if metric_namespace and not metric_name:
             raise InvalidParameterException(
-                constraint=f"If you include the metricNamespace parameter in your request, "
-                f"you must also include the metricName parameter.",
+                constraint=f'{"If you include the metricNamespace parameter in your request, "}'
+                f'{"you must also include the metricName parameter."}',
                 parameter="metricName",
                 value=metric_name,
             )
@@ -162,8 +162,16 @@ class LogsResponse(BaseResponse):
         log_group_name_prefix = self._get_param("logGroupNamePrefix")
         next_token = self._get_param("nextToken")
         limit = self._get_param("limit", 50)
+        if limit > 50:
+            raise InvalidParameterException(
+                constraint="Member must have value less than or equal to 50",
+                parameter="limit",
+                value=limit,
+            )
         groups, next_token = self.logs_backend.describe_log_groups(
-            limit, log_group_name_prefix, next_token
+            limit=limit,
+            log_group_name_prefix=log_group_name_prefix,
+            next_token=next_token,
         )
         result = {"logGroups": groups}
         if next_token:
@@ -206,10 +214,18 @@ class LogsResponse(BaseResponse):
         log_events = self._get_param("logEvents")
         sequence_token = self._get_param("sequenceToken")
 
-        next_sequence_token = self.logs_backend.put_log_events(
+        next_sequence_token, rejected_info = self.logs_backend.put_log_events(
             log_group_name, log_stream_name, log_events, sequence_token
         )
-        return json.dumps({"nextSequenceToken": next_sequence_token})
+        if rejected_info:
+            return json.dumps(
+                {
+                    "nextSequenceToken": next_sequence_token,
+                    "rejectedLogEventsInfo": rejected_info,
+                }
+            )
+        else:
+            return json.dumps({"nextSequenceToken": next_sequence_token})
 
     def get_log_events(self):
         log_group_name = self._get_param("logGroupName")
@@ -285,13 +301,13 @@ class LogsResponse(BaseResponse):
         next_token = self._get_param("nextToken")
         limit = self._get_param("limit")
         policies = self.logs_backend.describe_resource_policies(next_token, limit)
-        return json.dumps({"resourcePolicies": policies})
+        return json.dumps({"resourcePolicies": [p.describe() for p in policies]})
 
     def put_resource_policy(self):
         policy_name = self._get_param("policyName")
         policy_doc = self._get_param("policyDocument")
-        result = self.logs_backend.put_resource_policy(policy_name, policy_doc)
-        return json.dumps(result)
+        policy = self.logs_backend.put_resource_policy(policy_name, policy_doc)
+        return json.dumps({"resourcePolicy": policy.describe()})
 
     def delete_resource_policy(self):
         policy_name = self._get_param("policyName")

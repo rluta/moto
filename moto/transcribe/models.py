@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta
 from moto.core import BaseBackend, BaseModel
-from moto.ec2 import ec2_backends
+from moto.core.utils import BackendDict
 from moto.sts.models import ACCOUNT_ID
 from .exceptions import ConflictException, BadRequestException
 
@@ -9,7 +9,7 @@ from .exceptions import ConflictException, BadRequestException
 class BaseObject(BaseModel):
     def camelCase(self, key):
         words = []
-        for i, word in enumerate(key.split("_")):
+        for word in key.split("_"):
             words.append(word.title())
         return "".join(words)
 
@@ -181,7 +181,9 @@ class FakeTranscriptionJob(BaseObject):
                     )
                     if self.output_key is not None
                     else transcript_file_uri
-                    + "{1}.json".format(self.output_key, self.transcription_job_name)
+                    + "{transcription_job_name}.json".format(
+                        transcription_job_name=self.transcription_job_name
+                    )
                 )
                 self.output_location_type = "CUSTOMER_BUCKET"
             else:
@@ -267,7 +269,7 @@ class FakeMedicalTranscriptionJob(BaseObject):
         output_encryption_kms_key_id,
         settings,
         specialty,
-        type,
+        job_type,
     ):
         self._region_name = region_name
         self.medical_transcription_job_name = medical_transcription_job_name
@@ -285,7 +287,7 @@ class FakeMedicalTranscriptionJob(BaseObject):
             "ShowAlternatives": False,
         }
         self.specialty = specialty
-        self.type = type
+        self.type = job_type
         self._output_bucket_name = output_bucket_name
         self._output_encryption_kms_key_id = output_encryption_kms_key_id
         self.output_location_type = "CUSTOMER_BUCKET"
@@ -448,6 +450,15 @@ class TranscribeBackend(BaseBackend):
         self.__dict__ = {}
         self.__init__(region_name)
 
+    @staticmethod
+    def default_vpc_endpoint_service(service_region, zones):
+        """Default VPC endpoint services."""
+        return BaseBackend.default_vpc_endpoint_service_factory(
+            service_region, zones, "transcribe"
+        ) + BaseBackend.default_vpc_endpoint_service_factory(
+            service_region, zones, "transcribestreaming"
+        )
+
     def start_transcription_job(self, **kwargs):
 
         name = kwargs.get("transcription_job_name")
@@ -513,7 +524,7 @@ class TranscribeBackend(BaseBackend):
             output_encryption_kms_key_id=kwargs.get("output_encryption_kms_key_id"),
             settings=settings,
             specialty=kwargs.get("specialty"),
-            type=kwargs.get("type"),
+            job_type=kwargs.get("type"),
         )
 
         self.medical_transcriptions[name] = transcription_job_object
@@ -795,6 +806,4 @@ class TranscribeBackend(BaseBackend):
         return response
 
 
-transcribe_backends = {}
-for region, ec2_backend in ec2_backends.items():
-    transcribe_backends[region] = TranscribeBackend(region_name=region)
+transcribe_backends = BackendDict(TranscribeBackend, "transcribe")
