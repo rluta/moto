@@ -502,7 +502,7 @@ def test_routes_vpc_peering_connection():
     new_route.gateway_id.should.be.none
     new_route.instance_id.should.be.none
     new_route.vpc_peering_connection_id.should.equal(vpc_pcx.id)
-    new_route.state.should.equal("blackhole")
+    new_route.state.should.equal("active")
     new_route.destination_cidr_block.should.equal(ROUTE_CIDR)
 
 
@@ -734,6 +734,54 @@ def test_create_route_tables_with_tags():
     )
 
     route_table.tags.should.have.length_of(1)
+
+
+@mock_ec2
+def test_create_route_with_egress_only_igw():
+    ec2 = boto3.resource("ec2", region_name="eu-central-1")
+    ec2_client = boto3.client("ec2", region_name="eu-central-1")
+
+    vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
+    eigw = ec2_client.create_egress_only_internet_gateway(VpcId=vpc.id)
+    eigw_id = eigw["EgressOnlyInternetGateway"]["EgressOnlyInternetGatewayId"]
+
+    route_table = ec2.create_route_table(VpcId=vpc.id)
+
+    ec2_client.create_route(
+        RouteTableId=route_table.id,
+        EgressOnlyInternetGatewayId=eigw_id,
+        DestinationIpv6CidrBlock="::/0",
+    )
+
+    route_table.reload()
+    eigw_route = [
+        r
+        for r in route_table.routes_attribute
+        if r.get("DestinationIpv6CidrBlock") == "::/0"
+    ][0]
+    eigw_route.get("EgressOnlyInternetGatewayId").should.equal(eigw_id)
+    eigw_route.get("State").should.equal("active")
+
+
+@mock_ec2
+def test_create_route_with_unknown_egress_only_igw():
+    ec2 = boto3.resource("ec2", region_name="eu-central-1")
+    ec2_client = boto3.client("ec2", region_name="eu-central-1")
+
+    vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
+    subnet = ec2.create_subnet(
+        VpcId=vpc.id, CidrBlock="10.0.0.0/24", AvailabilityZone="us-west-2a"
+    )
+
+    route_table = ec2.create_route_table(VpcId=vpc.id)
+
+    with pytest.raises(ClientError) as ex:
+        ec2_client.create_route(
+            RouteTableId=route_table.id, EgressOnlyInternetGatewayId="eoigw"
+        )
+    err = ex.value.response["Error"]
+    err["Code"].should.equal("InvalidGatewayID.NotFound")
+    err["Message"].should.equal("The eigw ID 'eoigw' does not exist")
 
 
 @mock_ec2

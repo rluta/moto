@@ -286,21 +286,46 @@ responses_mock.add_passthru("http")
 
 
 def _find_first_match_legacy(self, request):
+    matches = []
     for i, match in enumerate(self._matches):
         if match.matches(request):
-            return match
+            matches.append(match)
 
+    # Look for implemented callbacks first
+    implemented_matches = [
+        m
+        for m in matches
+        if type(m) is not CallbackResponse or m.callback != not_implemented_callback
+    ]
+    if implemented_matches:
+        return implemented_matches[0]
+    elif matches:
+        # We had matches, but all were of type not_implemented_callback
+        return matches[0]
     return None
 
 
 def _find_first_match(self, request):
+    matches = []
     match_failed_reasons = []
     for i, match in enumerate(self._matches):
         match_result, reason = match.matches(request)
         if match_result:
-            return match, match_failed_reasons
+            matches.append(match)
         else:
             match_failed_reasons.append(reason)
+
+    # Look for implemented callbacks first
+    implemented_matches = [
+        m
+        for m in matches
+        if type(m) is not CallbackResponse or m.callback != not_implemented_callback
+    ]
+    if implemented_matches:
+        return implemented_matches[0], []
+    elif matches:
+        # We had matches, but all were of type not_implemented_callback
+        return matches[0], match_failed_reasons
 
     return None, match_failed_reasons
 
@@ -815,7 +840,7 @@ class MotoAPIBackend(BaseBackend):
     def reset(self):
         import moto.backends as backends
 
-        for name, backends_ in backends.named_backends():
+        for name, backends_ in backends.loaded_backends():
             if name == "moto_api":
                 continue
             for region_name, backend in backends_.items():

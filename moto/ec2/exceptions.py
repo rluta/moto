@@ -2,10 +2,33 @@ from __future__ import unicode_literals
 from moto.core.exceptions import RESTError
 
 
+# EC2 has a custom root-tag - <Response> vs <ErrorResponse>
+# `terraform destroy` will complain if the roottag is incorrect
+# See https://docs.aws.amazon.com/AWSEC2/latest/APIReference/errors-overview.html#api-error-response
+EC2_ERROR_RESPONSE = """<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Errors>
+    <Error>
+      <Code>{{error_type}}</Code>
+      <Message>{{message}}</Message>
+    </Error>
+  </Errors>
+  <{{request_id_tag}}>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</{{request_id_tag}}>
+</Response>
+"""
+
+
 class EC2ClientError(RESTError):
     code = 400
     # EC2 uses <RequestID> as tag name in the XML response
     request_id_tag_name = "RequestID"
+
+    def __init__(self, *args, **kwargs):
+
+        kwargs.setdefault("template", "custom_response")
+        self.templates["custom_response"] = EC2_ERROR_RESPONSE
+
+        super(EC2ClientError, self).__init__(*args, **kwargs)
 
 
 class DependencyViolationError(EC2ClientError):
@@ -60,8 +83,9 @@ class InvalidKeyPairFormatError(EC2ClientError):
 
 class InvalidVPCIdError(EC2ClientError):
     def __init__(self, vpc_id):
+
         super(InvalidVPCIdError, self).__init__(
-            "InvalidVpcID.NotFound", "VpcID {0} does not exist.".format(vpc_id)
+            "InvalidVpcID.NotFound", "VpcID {0} does not exist.".format(vpc_id),
         )
 
 
@@ -100,11 +124,19 @@ class InvalidNetworkAclIdError(EC2ClientError):
 
 
 class InvalidVpnGatewayIdError(EC2ClientError):
-    def __init__(self, network_acl_id):
+    def __init__(self, vpn_gw):
         super(InvalidVpnGatewayIdError, self).__init__(
             "InvalidVpnGatewayID.NotFound",
-            "The virtual private gateway ID '{0}' does not exist".format(
-                network_acl_id
+            "The virtual private gateway ID '{0}' does not exist".format(vpn_gw),
+        )
+
+
+class InvalidVpnGatewayAttachmentError(EC2ClientError):
+    def __init__(self, vpn_gw, vpc_id):
+        super(InvalidVpnGatewayAttachmentError, self).__init__(
+            "InvalidVpnGatewayAttachment.NotFound",
+            "The attachment with vpn gateway ID '{}' and vpc ID '{}' does not exist".format(
+                vpn_gw, vpc_id
             ),
         )
 
@@ -176,6 +208,7 @@ class InvalidPermissionDuplicateError(EC2ClientError):
 
 class InvalidRouteTableIdError(EC2ClientError):
     def __init__(self, route_table_id):
+
         super(InvalidRouteTableIdError, self).__init__(
             "InvalidRouteTableID.NotFound",
             "The routeTable ID '{0}' does not exist".format(route_table_id),
@@ -651,4 +684,30 @@ class InvalidTaggableResourceType(EC2ClientError):
             "'{}' is not a valid taggable resource type for this operation.".format(
                 resource_type
             ),
+        )
+
+
+class GenericInvalidParameterValueError(EC2ClientError):
+    def __init__(self, attribute, value):
+        super(GenericInvalidParameterValueError, self).__init__(
+            "InvalidParameterValue",
+            "invalid value for parameter {0}: {1}".format(attribute, value),
+        )
+
+
+class InvalidSubnetCidrBlockAssociationID(EC2ClientError):
+    def __init__(self, association_id):
+        super(InvalidSubnetCidrBlockAssociationID, self).__init__(
+            "InvalidSubnetCidrBlockAssociationID.NotFound",
+            "The subnet CIDR block with association ID '{0}' does not exist".format(
+                association_id
+            ),
+        )
+
+
+class InvalidCarrierGatewayID(EC2ClientError):
+    def __init__(self, carrier_gateway_id):
+        super(InvalidCarrierGatewayID, self).__init__(
+            "InvalidCarrierGatewayID.NotFound",
+            "The CarrierGateway ID '{0}' does not exist".format(carrier_gateway_id),
         )

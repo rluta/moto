@@ -63,6 +63,8 @@ class BucketAlreadyExists(BucketError):
     code = 409
 
     def __init__(self, *args, **kwargs):
+        kwargs.setdefault("template", "bucket_error")
+        self.templates["bucket_error"] = ERROR_WITH_BUCKET_NAME
         super(BucketAlreadyExists, self).__init__(
             "BucketAlreadyExists",
             (
@@ -235,6 +237,16 @@ class CrossLocationLoggingProhibitted(S3ClientError):
         super(CrossLocationLoggingProhibitted, self).__init__(
             "CrossLocationLoggingProhibitted", "Cross S3 location logging not allowed."
         )
+
+
+class InvalidMaxPartArgument(S3ClientError):
+    code = 400
+
+    def __init__(self, arg, min_val, max_val):
+        error = "Argument {} must be an integer between {} and {}".format(
+            arg, min_val, max_val
+        )
+        super(InvalidMaxPartArgument, self).__init__("InvalidArgument", error)
 
 
 class InvalidNotificationARN(S3ClientError):

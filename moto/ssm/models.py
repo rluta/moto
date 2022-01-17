@@ -1,6 +1,7 @@
 from __future__ import unicode_literals
 
 import re
+from dataclasses import dataclass
 from typing import Dict
 
 from boto3 import Session
@@ -55,6 +56,7 @@ class Parameter(BaseModel):
         keyid,
         last_modified_date,
         version,
+        data_type,
         tags=None,
     ):
         self.name = name
@@ -64,6 +66,7 @@ class Parameter(BaseModel):
         self.keyid = keyid
         self.last_modified_date = last_modified_date
         self.version = version
+        self.data_type = data_type
         self.tags = tags or []
         self.labels = []
 
@@ -93,6 +96,7 @@ class Parameter(BaseModel):
             "Value": self.decrypt(self.value) if decrypt else self.value,
             "Version": self.version,
             "LastModifiedDate": round(self.last_modified_date, 3),
+            "DataType": self.data_type,
         }
 
         if region:
@@ -128,24 +132,34 @@ def generate_ssm_doc_param_list(parameters):
         return None
     param_list = []
     for param_name, param_info in parameters.items():
-        final_dict = {}
+        final_dict = {
+            "Name": param_name,
+        }
 
-        final_dict["Name"] = param_name
-        final_dict["Type"] = param_info["type"]
-        final_dict["Description"] = param_info["description"]
+        description = param_info.get("description")
+        if description:
+            final_dict["Description"] = description
 
-        if (
-            param_info["type"] == "StringList"
-            or param_info["type"] == "StringMap"
-            or param_info["type"] == "MapList"
-        ):
-            final_dict["DefaultValue"] = json.dumps(param_info["default"])
-        else:
-            final_dict["DefaultValue"] = str(param_info["default"])
+        param_type = param_info["type"]
+        final_dict["Type"] = param_type
+
+        default_value = param_info.get("default")
+        if default_value is not None:
+            if param_type in {"StringList", "StringMap", "MapList"}:
+                final_dict["DefaultValue"] = json.dumps(default_value)
+            else:
+                final_dict["DefaultValue"] = str(default_value)
 
         param_list.append(final_dict)
 
     return param_list
+
+
+@dataclass(frozen=True)
+class AccountPermission:
+    account_id: str
+    version: str
+    created_at: datetime
 
 
 class Documents(BaseModel):
@@ -154,7 +168,7 @@ class Documents(BaseModel):
         self.versions = {version: ssm_document}
         self.default_version = version
         self.latest_version = version
-        self.permissions = {}  # {AccountID: version }
+        self.permissions = {}  # {AccountID: AccountPermission }
 
     def get_default_version(self):
         return self.versions.get(self.default_version)
@@ -230,7 +244,7 @@ class Documents(BaseModel):
             new_latest_version = ordered_versions[-1]
             self.latest_version = new_latest_version
 
-    def describe(self, document_version=None, version_name=None):
+    def describe(self, document_version=None, version_name=None, tags=None):
         document = self.find(document_version, version_name)
         base = {
             "Hash": document.hash,
@@ -253,32 +267,45 @@ class Documents(BaseModel):
             base["VersionName"] = document.version_name
         if document.target_type:
             base["TargetType"] = document.target_type
-        if document.tags:
-            base["Tags"] = document.tags
+        if tags:
+            base["Tags"] = tags
 
         return base
 
     def modify_permissions(self, accounts_to_add, accounts_to_remove, version):
-        if "all" in accounts_to_add:
-            self.permissions.clear()
-        else:
-            self.permissions.pop("all", None)
+        version = version or "$DEFAULT"
+        if accounts_to_add:
+            if "all" in accounts_to_add:
+                self.permissions.clear()
+            else:
+                self.permissions.pop("all", None)
 
-        new_permissions = {account_id: version for account_id in accounts_to_add}
-        self.permissions.update(**new_permissions)
+            new_permissions = {
+                account_id: AccountPermission(
+                    account_id, version, datetime.datetime.now()
+                )
+                for account_id in accounts_to_add
+            }
+            self.permissions.update(**new_permissions)
 
-        if "all" in accounts_to_remove:
-            self.permissions.clear()
-        else:
-            for account_id in accounts_to_remove:
-                self.permissions.pop(account_id, None)
+        if accounts_to_remove:
+            if "all" in accounts_to_remove:
+                self.permissions.clear()
+            else:
+                for account_id in accounts_to_remove:
+                    self.permissions.pop(account_id, None)
 
     def describe_permissions(self):
+
+        permissions_ordered_by_date = sorted(
+            self.permissions.values(), key=lambda p: p.created_at
+        )
+
         return {
-            "AccountIds": list(self.permissions.keys()),
+            "AccountIds": [p.account_id for p in permissions_ordered_by_date],
             "AccountSharingInfoList": [
-                {"AccountId": account_id, "SharedDocumentVersion": document_version}
-                for account_id, document_version in self.permissions.items()
+                {"AccountId": p.account_id, "SharedDocumentVersion": p.version}
+                for p in permissions_ordered_by_date
             ],
         }
 
@@ -297,7 +324,6 @@ class Document(BaseModel):
         requires,
         attachments,
         target_type,
-        tags,
         document_version="1",
     ):
         self.name = name
@@ -308,7 +334,6 @@ class Document(BaseModel):
         self.requires = requires
         self.attachments = attachments
         self.target_type = target_type
-        self.tags = tags
 
         self.status = "Active"
         self.document_version = document_version
@@ -350,12 +375,8 @@ class Document(BaseModel):
                 content_json.get("parameters")
             )
 
-            if (
-                self.schema_version == "0.3"
-                or self.schema_version == "2.0"
-                or self.schema_version == "2.2"
-            ):
-                self.mainSteps = content_json["mainSteps"]
+            if self.schema_version in {"0.3", "2.0", "2.2"}:
+                self.mainSteps = content_json.get("mainSteps")
             elif self.schema_version == "1.2":
                 self.runtimeConfig = content_json.get("runtimeConfig")
 
@@ -365,6 +386,28 @@ class Document(BaseModel):
     @property
     def hash(self):
         return hashlib.sha256(self.content.encode("utf-8")).hexdigest()
+
+    def list_describe(self, tags=None):
+        base = {
+            "Name": self.name,
+            "Owner": self.owner,
+            "DocumentVersion": self.document_version,
+            "DocumentType": self.document_type,
+            "SchemaVersion": self.schema_version,
+            "DocumentFormat": self.document_format,
+        }
+        if self.version_name:
+            base["VersionName"] = self.version_name
+        if self.platform_types:
+            base["PlatformTypes"] = self.platform_types
+        if self.target_type:
+            base["TargetType"] = self.target_type
+        if self.requires:
+            base["Requires"] = self.requires
+        if tags:
+            base["Tags"] = tags
+
+        return base
 
 
 class Command(BaseModel):
@@ -618,6 +661,14 @@ def _document_filter_match(filters, ssm_doc):
     return True
 
 
+def _valid_parameter_data_type(data_type):
+    """
+    Parameter DataType field allows only `text` and `aws:ec2:image` values
+
+    """
+    return data_type in ("text", "aws:ec2:image")
+
+
 class SimpleSystemManagerBackend(BaseBackend):
     def __init__(self, region_name=None):
         super(SimpleSystemManagerBackend, self).__init__()
@@ -669,34 +720,20 @@ class SimpleSystemManagerBackend(BaseBackend):
             raise ValidationException("Invalid document format " + str(document_format))
         return content
 
-    @staticmethod
-    def _generate_document_list_information(ssm_document):
-        base = {
-            "Name": ssm_document.name,
-            "Owner": ssm_document.owner,
-            "DocumentVersion": ssm_document.document_version,
-            "DocumentType": ssm_document.document_type,
-            "SchemaVersion": ssm_document.schema_version,
-            "DocumentFormat": ssm_document.document_format,
-        }
-        if ssm_document.version_name:
-            base["VersionName"] = ssm_document.version_name
-        if ssm_document.platform_types:
-            base["PlatformTypes"] = ssm_document.platform_types
-        if ssm_document.target_type:
-            base["TargetType"] = ssm_document.target_type
-        if ssm_document.tags:
-            base["Tags"] = ssm_document.tags
-        if ssm_document.requires:
-            base["Requires"] = ssm_document.requires
-
-        return base
-
     def _get_documents(self, name):
         documents = self._documents.get(name)
         if not documents:
             raise InvalidDocument("The specified document does not exist.")
         return documents
+
+    def _get_documents_tags(self, name):
+        docs_tags = self._resource_tags.get("Document")
+        if docs_tags:
+            document_tags = docs_tags.get(name, {})
+            return [
+                {"Key": tag, "Value": value} for tag, value in document_tags.items()
+            ]
+        return []
 
     def create_document(
         self,
@@ -719,7 +756,6 @@ class SimpleSystemManagerBackend(BaseBackend):
             requires=requires,
             attachments=attachments,
             target_type=target_type,
-            tags=tags,
         )
 
         _validate_document_info(
@@ -735,7 +771,11 @@ class SimpleSystemManagerBackend(BaseBackend):
         documents = Documents(ssm_document)
         self._documents[ssm_document.name] = documents
 
-        return documents.describe()
+        if tags:
+            document_tags = {t["Key"]: t["Value"] for t in tags}
+            self.add_tags_to_resource("Document", name, document_tags)
+
+        return documents.describe(tags=tags)
 
     def delete_document(self, name, document_version, version_name, force):
         documents = self._get_documents(name)
@@ -862,23 +902,25 @@ class SimpleSystemManagerBackend(BaseBackend):
             requires=old_ssm_document.requires,
             attachments=attachments,
             target_type=target_type,
-            tags=old_ssm_document.tags,
             document_version=new_version,
         )
 
         for doc_version, document in documents.versions.items():
             if document.content == new_ssm_document.content:
-                raise DuplicateDocumentContent(
-                    "The content of the association document matches another document. "
-                    "Change the content of the document and try again."
-                )
+                if not target_type or target_type == document.target_type:
+                    raise DuplicateDocumentContent(
+                        "The content of the association document matches another document. "
+                        "Change the content of the document and try again."
+                    )
 
         documents.add_new_version(new_ssm_document)
-        return documents.describe(document_version=new_version)
+        tags = self._get_documents_tags(name)
+        return documents.describe(document_version=new_version, tags=tags)
 
     def describe_document(self, name, document_version, version_name):
         documents = self._get_documents(name)
-        return documents.describe(document_version, version_name)
+        tags = self._get_documents_tags(name)
+        return documents.describe(document_version, version_name, tags=tags)
 
     def list_documents(
         self, document_filter_list, filters, max_results=10, next_token="0"
@@ -906,7 +948,9 @@ class SimpleSystemManagerBackend(BaseBackend):
                 # If we have filters enabled, and we don't match them,
                 continue
             else:
-                results.append(self._generate_document_list_information(ssm_doc))
+                tags = self._get_documents_tags(ssm_doc.name)
+                doc_describe = ssm_doc.list_describe(tags=tags)
+                results.append(doc_describe)
 
         # If we've fallen out of the loop, theres no more documents. No next token.
         return results, ""
@@ -928,13 +972,13 @@ class SimpleSystemManagerBackend(BaseBackend):
         permission_type,
     ):
 
-        account_id_regex = re.compile(r"(all|[0-9]{12})")
+        account_id_regex = re.compile(r"^(all|[0-9]{12})$", re.IGNORECASE)
         version_regex = re.compile(r"^([$]LATEST|[$]DEFAULT|[$]ALL)$")
 
         account_ids_to_add = account_ids_to_add or []
         account_ids_to_remove = account_ids_to_remove or []
 
-        if not version_regex.match(shared_document_version):
+        if shared_document_version and not version_regex.match(shared_document_version):
             raise ValidationException(
                 f"Value '{shared_document_version}' at 'sharedDocumentVersion' failed to satisfy constraint: "
                 f"Member must satisfy regular expression pattern: ([$]LATEST|[$]DEFAULT|[$]ALL)."
@@ -954,14 +998,12 @@ class SimpleSystemManagerBackend(BaseBackend):
                     "Member must satisfy regular expression pattern: (?i)all|[0-9]{12}]."
                 )
 
-        accounts_to_add = set(account_ids_to_add)
-        if "all" in accounts_to_add and len(accounts_to_add) > 1:
+        if "all" in account_ids_to_add and len(account_ids_to_add) > 1:
             raise DocumentPermissionLimit(
                 "Accounts can either be all or a group of AWS accounts"
             )
 
-        accounts_to_remove = set(account_ids_to_remove)
-        if "all" in accounts_to_remove and len(accounts_to_remove) > 1:
+        if "all" in account_ids_to_remove and len(account_ids_to_remove) > 1:
             raise DocumentPermissionLimit(
                 "Accounts can either be all or a group of AWS accounts"
             )
@@ -974,7 +1016,7 @@ class SimpleSystemManagerBackend(BaseBackend):
 
         document = self._get_documents(name)
         document.modify_permissions(
-            accounts_to_add, accounts_to_remove, shared_document_version
+            account_ids_to_add, account_ids_to_remove, shared_document_version
         )
 
     def delete_parameter(self, name):
@@ -1480,7 +1522,16 @@ class SimpleSystemManagerBackend(BaseBackend):
             )
 
     def put_parameter(
-        self, name, description, value, type, allowed_pattern, keyid, overwrite, tags,
+        self,
+        name,
+        description,
+        value,
+        type,
+        allowed_pattern,
+        keyid,
+        overwrite,
+        tags,
+        data_type,
     ):
         if not value:
             raise ValidationException(
@@ -1504,6 +1555,15 @@ class SimpleSystemManagerBackend(BaseBackend):
                     "formed as a mix of letters, numbers and the following 3 symbols .-_"
                 )
             raise ValidationException(invalid_prefix_error)
+
+        if not _valid_parameter_data_type(data_type):
+            # The check of the existence of an AMI ID in the account for a parameter of DataType `aws:ec2:image`
+            # is not supported. The parameter will be created.
+            # https://docs.aws.amazon.com/systems-manager/latest/userguide/parameter-store-ec2-aliases.html
+            raise ValidationException(
+                f"The following data type is not supported: {data_type} (Data type names are all lowercase.)"
+            )
+
         previous_parameter_versions = self._parameters[name]
         if len(previous_parameter_versions) == 0:
             previous_parameter = None
@@ -1522,21 +1582,22 @@ class SimpleSystemManagerBackend(BaseBackend):
         last_modified_date = time.time()
         self._parameters[name].append(
             Parameter(
-                name,
-                value,
-                type,
-                description,
-                allowed_pattern,
-                keyid,
-                last_modified_date,
-                version,
-                tags or [],
+                name=name,
+                value=value,
+                type=type,
+                description=description,
+                allowed_pattern=allowed_pattern,
+                keyid=keyid,
+                last_modified_date=last_modified_date,
+                version=version,
+                tags=tags or [],
+                data_type=data_type,
             )
         )
 
         if tags:
             tags = {t["Key"]: t["Value"] for t in tags}
-            self.add_tags_to_resource(name, "Parameter", tags)
+            self.add_tags_to_resource("Parameter", name, tags)
 
         return version
 

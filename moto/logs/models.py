@@ -5,6 +5,7 @@ from boto3 import Session
 from moto import core as moto_core
 from moto.core import BaseBackend, BaseModel
 from moto.core.utils import unix_time_millis
+from moto.logs.metric_filters import MetricFilters
 from moto.logs.exceptions import (
     ResourceNotFoundException,
     ResourceAlreadyExistsException,
@@ -32,6 +33,7 @@ class LogEvent(BaseModel):
         self.message = log_event["message"]
         self.event_id = self.__class__._event_id
         self.__class__._event_id += 1
+        ""
 
     def to_filter_dict(self):
         return {
@@ -121,10 +123,10 @@ class LogStream(BaseModel):
         self.events += events
         self.upload_sequence_token += 1
 
-        if self.destination_arn and self.destination_arn.split(":")[2] == "lambda":
-            from moto.awslambda import lambda_backends  # due to circular dependency
-
-            lambda_log_events = [
+        service = None
+        if self.destination_arn:
+            service = self.destination_arn.split(":")[2]
+            formatted_log_events = [
                 {
                     "id": event.event_id,
                     "timestamp": event.timestamp,
@@ -133,12 +135,27 @@ class LogStream(BaseModel):
                 for event in events
             ]
 
+        if service == "lambda":
+            from moto.awslambda import lambda_backends  # due to circular dependency
+
             lambda_backends[self.region].send_log_event(
                 self.destination_arn,
                 self.filter_name,
                 log_group_name,
                 log_stream_name,
-                lambda_log_events,
+                formatted_log_events,
+            )
+        elif service == "firehose":
+            from moto.firehose import (  # pylint: disable=import-outside-toplevel
+                firehose_backends,
+            )
+
+            firehose_backends[self.region].send_log_event(
+                self.destination_arn,
+                self.filter_name,
+                log_group_name,
+                log_stream_name,
+                formatted_log_events,
             )
 
         return "{:056d}".format(self.upload_sequence_token)
@@ -153,6 +170,9 @@ class LogStream(BaseModel):
         next_token,
         start_from_head,
     ):
+        if limit is None:
+            limit = 10000
+
         def filter_func(event):
             if start_time and event.timestamp < start_time:
                 return False
@@ -382,6 +402,8 @@ class LogGroup(BaseModel):
         filter_pattern,
         interleaved,
     ):
+        if not limit:
+            limit = 10000
         streams = [
             stream
             for name, stream in self.streams.items()
@@ -520,6 +542,7 @@ class LogsBackend(BaseBackend):
     def __init__(self, region_name):
         self.region_name = region_name
         self.groups = dict()  # { logGroupName: LogGroup}
+        self.filters = MetricFilters()
         self.queries = dict()
         self.resource_policies = dict()
 
@@ -531,6 +554,12 @@ class LogsBackend(BaseBackend):
     def create_log_group(self, log_group_name, tags, **kwargs):
         if log_group_name in self.groups:
             raise ResourceAlreadyExistsException()
+        if len(log_group_name) > 512:
+            raise InvalidParameterException(
+                constraint="Member must have length less than or equal to 512",
+                parameter="logGroupName",
+                value=log_group_name,
+            )
         self.groups[log_group_name] = LogGroup(
             self.region_name, log_group_name, tags, **kwargs
         )
@@ -547,6 +576,12 @@ class LogsBackend(BaseBackend):
         del self.groups[log_group_name]
 
     def describe_log_groups(self, limit, log_group_name_prefix, next_token):
+        if limit > 50:
+            raise InvalidParameterException(
+                constraint="Member must have value less than or equal to 50",
+                parameter="limit",
+                value=limit,
+            )
         if log_group_name_prefix is None:
             log_group_name_prefix = ""
 
@@ -608,6 +643,22 @@ class LogsBackend(BaseBackend):
     ):
         if log_group_name not in self.groups:
             raise ResourceNotFoundException()
+        if limit > 50:
+            raise InvalidParameterException(
+                constraint="Member must have value less than or equal to 50",
+                parameter="limit",
+                value=limit,
+            )
+        if order_by not in ["LogStreamName", "LastEventTime"]:
+            raise InvalidParameterException(
+                constraint="Member must satisfy enum value set: [LogStreamName, LastEventTime]",
+                parameter="orderBy",
+                value=order_by,
+            )
+        if order_by == "LastEventTime" and log_stream_name_prefix:
+            raise InvalidParameterException(
+                msg="Cannot order by LastEventTime with a logStreamNamePrefix."
+            )
         log_group = self.groups[log_group_name]
         return log_group.describe_log_streams(
             descending,
@@ -641,6 +692,12 @@ class LogsBackend(BaseBackend):
     ):
         if log_group_name not in self.groups:
             raise ResourceNotFoundException()
+        if limit and limit > 1000:
+            raise InvalidParameterException(
+                constraint="Member must have value less than or equal to 10000",
+                parameter="limit",
+                value=limit,
+            )
         log_group = self.groups[log_group_name]
         return log_group.get_log_events(
             log_group_name,
@@ -665,6 +722,12 @@ class LogsBackend(BaseBackend):
     ):
         if log_group_name not in self.groups:
             raise ResourceNotFoundException()
+        if limit and limit > 1000:
+            raise InvalidParameterException(
+                constraint="Member must have value less than or equal to 10000",
+                parameter="limit",
+                value=limit,
+            )
         log_group = self.groups[log_group_name]
         return log_group.filter_log_events(
             log_group_name,
@@ -751,6 +814,24 @@ class LogsBackend(BaseBackend):
         log_group = self.groups[log_group_name]
         log_group.untag(tags)
 
+    def put_metric_filter(
+        self, filter_name, filter_pattern, log_group_name, metric_transformations
+    ):
+        self.filters.add_filter(
+            filter_name, filter_pattern, log_group_name, metric_transformations
+        )
+
+    def describe_metric_filters(
+        self, prefix=None, log_group_name=None, metric_name=None, metric_namespace=None
+    ):
+        filters = self.filters.get_matching_filters(
+            prefix, log_group_name, metric_name, metric_namespace
+        )
+        return filters
+
+    def delete_metric_filter(self, filter_name=None, log_group_name=None):
+        self.filters.delete_filter(filter_name, log_group_name)
+
     def describe_subscription_filters(self, log_group_name):
         log_group = self.groups.get(log_group_name)
 
@@ -762,21 +843,46 @@ class LogsBackend(BaseBackend):
     def put_subscription_filter(
         self, log_group_name, filter_name, filter_pattern, destination_arn, role_arn
     ):
-        # TODO: support other destinations like Kinesis stream
-        from moto.awslambda import lambda_backends  # due to circular dependency
-
         log_group = self.groups.get(log_group_name)
 
         if not log_group:
             raise ResourceNotFoundException()
 
-        lambda_func = lambda_backends[self.region_name].get_function(destination_arn)
+        service = destination_arn.split(":")[2]
+        if service == "lambda":
+            from moto.awslambda import (  # pylint: disable=import-outside-toplevel
+                lambda_backends,
+            )
 
-        # no specific permission check implemented
-        if not lambda_func:
+            lambda_func = lambda_backends[self.region_name].get_function(
+                destination_arn
+            )
+            # no specific permission check implemented
+            if not lambda_func:
+                raise InvalidParameterException(
+                    "Could not execute the lambda function. Make sure you "
+                    "have given CloudWatch Logs permission to execute your "
+                    "function."
+                )
+        elif service == "firehose":
+            from moto.firehose import (  # pylint: disable=import-outside-toplevel
+                firehose_backends,
+            )
+
+            firehose = firehose_backends[self.region_name].lookup_name_from_arn(
+                destination_arn
+            )
+            if not firehose:
+                raise InvalidParameterException(
+                    "Could not deliver test message to specified Firehose "
+                    "stream. Check if the given Firehose stream is in ACTIVE "
+                    "state."
+                )
+        else:
+            # TODO: support Kinesis stream destinations
             raise InvalidParameterException(
-                "Could not execute the lambda function. "
-                "Make sure you have given CloudWatch Logs permission to execute your function."
+                f"Service '{service}' has not implemented for "
+                f"put_subscription_filter()"
             )
 
         log_group.put_subscription_filter(

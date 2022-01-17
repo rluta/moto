@@ -128,10 +128,11 @@ def append_mock_to_init_py(service):
     filtered_lines = [_ for _ in lines if re.match("^mock_.*lazy_load(.*)$", _)]
     last_import_line_index = lines.index(filtered_lines[-1])
 
-    new_line = 'mock_{} = lazy_load(".{}", "mock_{}")'.format(
+    new_line = 'mock_{} = lazy_load(".{}", "mock_{}", boto3_name="{}")'.format(
         get_escaped_service(service),
         get_escaped_service(service),
         get_escaped_service(service),
+        service
     )
     lines.insert(last_import_line_index + 1, new_line)
 
@@ -163,7 +164,7 @@ def append_mock_dict_to_backends_py(service):
         fhandle.write(body)
 
 
-def initialize_service(service, api_protocol):
+def initialize_service(service, operation, api_protocol):
     """create lib and test dirs if not exist"""
     lib_dir = get_lib_dir(service)
     test_dir = get_test_dir(service)
@@ -210,7 +211,6 @@ def initialize_service(service, api_protocol):
 
     # append mock to init files
     append_mock_to_init_py(service)
-    append_mock_dict_to_backends_py(service)
 
 
 def to_upper_camel_case(string):
@@ -261,11 +261,11 @@ def get_function_in_responses(service, operation, protocol):
     for input_name, input_type in inputs.items():
         type_name = input_type.type_name
         if type_name == "integer":
-            arg_line_tmpl = '    {} = self._get_int_param("{}")\n'
+            arg_line_tmpl = '    {}=self._get_int_param("{}")\n'
         elif type_name == "list":
-            arg_line_tmpl = '    {} = self._get_list_prefix("{}.member")\n'
+            arg_line_tmpl = '    {}=self._get_list_prefix("{}.member")\n'
         else:
-            arg_line_tmpl = '    {} = self._get_param("{}")\n'
+            arg_line_tmpl = '    {}=self._get_param("{}")\n'
         body += arg_line_tmpl.format(to_snake_case(input_name), input_name)
     if output_names:
         body += "    {} = self.{}_backend.{}(\n".format(
