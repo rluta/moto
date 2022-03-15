@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta
 from moto.core import BaseBackend, BaseModel
-from moto.ec2 import ec2_backends
+from moto.core.utils import BackendDict
 from moto.sts.models import ACCOUNT_ID
 from .exceptions import ConflictException, BadRequestException
 
@@ -9,7 +9,7 @@ from .exceptions import ConflictException, BadRequestException
 class BaseObject(BaseModel):
     def camelCase(self, key):
         words = []
-        for i, word in enumerate(key.split("_")):
+        for word in key.split("_"):
             words.append(word.title())
         return "".join(words)
 
@@ -172,12 +172,12 @@ class FakeTranscriptionJob(BaseObject):
             )
             if self._output_bucket_name:
                 transcript_file_uri = "https://s3.{0}.amazonaws.com/{1}/".format(
-                    self._region_name, self._output_bucket_name,
+                    self._region_name, self._output_bucket_name
                 )
                 transcript_file_uri = (
                     transcript_file_uri
                     + "{0}/{1}.json".format(
-                        self.output_key, self.transcription_job_name,
+                        self.output_key, self.transcription_job_name
                     )
                     if self.output_key is not None
                     else transcript_file_uri
@@ -199,7 +199,7 @@ class FakeTranscriptionJob(BaseObject):
 
 class FakeVocabulary(BaseObject):
     def __init__(
-        self, region_name, vocabulary_name, language_code, phrases, vocabulary_file_uri,
+        self, region_name, vocabulary_name, language_code, phrases, vocabulary_file_uri
     ):
         self._region_name = region_name
         self.vocabulary_name = vocabulary_name
@@ -210,7 +210,7 @@ class FakeVocabulary(BaseObject):
         self.last_modified_time = None
         self.failure_reason = None
         self.download_uri = "https://s3.{0}.amazonaws.com/aws-transcribe-dictionary-model-{0}-prod/{1}/{2}/{3}/input.txt".format(  # noqa: E501
-            region_name, ACCOUNT_ID, vocabulary_name, uuid,
+            region_name, ACCOUNT_ID, vocabulary_name, uuid
         )
 
     def response_object(self, response_type):
@@ -269,7 +269,7 @@ class FakeMedicalTranscriptionJob(BaseObject):
         output_encryption_kms_key_id,
         settings,
         specialty,
-        type,
+        job_type,
     ):
         self._region_name = region_name
         self.medical_transcription_job_name = medical_transcription_job_name
@@ -287,7 +287,7 @@ class FakeMedicalTranscriptionJob(BaseObject):
             "ShowAlternatives": False,
         }
         self.specialty = specialty
-        self.type = type
+        self.type = job_type
         self._output_bucket_name = output_bucket_name
         self._output_encryption_kms_key_id = output_encryption_kms_key_id
         self.output_location_type = "CUSTOMER_BUCKET"
@@ -381,7 +381,7 @@ class FakeMedicalTranscriptionJob(BaseObject):
 
 class FakeMedicalVocabulary(BaseObject):
     def __init__(
-        self, region_name, vocabulary_name, language_code, vocabulary_file_uri,
+        self, region_name, vocabulary_name, language_code, vocabulary_file_uri
     ):
         self._region_name = region_name
         self.vocabulary_name = vocabulary_name
@@ -524,7 +524,7 @@ class TranscribeBackend(BaseBackend):
             output_encryption_kms_key_id=kwargs.get("output_encryption_kms_key_id"),
             settings=settings,
             specialty=kwargs.get("specialty"),
-            type=kwargs.get("type"),
+            job_type=kwargs.get("type"),
         )
 
         self.medical_transcriptions[name] = transcription_job_object
@@ -559,7 +559,7 @@ class TranscribeBackend(BaseBackend):
         except KeyError:
             raise BadRequestException(
                 message="The requested job couldn't be found. "
-                "Check the job name and try your request again.",
+                "Check the job name and try your request again."
             )
 
     def delete_medical_transcription_job(self, medical_transcription_job_name):
@@ -568,7 +568,7 @@ class TranscribeBackend(BaseBackend):
         except KeyError:
             raise BadRequestException(
                 message="The requested job couldn't be found. "
-                "Check the job name and try your request again.",
+                "Check the job name and try your request again."
             )
 
     def list_transcription_jobs(
@@ -646,13 +646,13 @@ class TranscribeBackend(BaseBackend):
             and vocabulary_file_uri is None
         ):
             raise BadRequestException(
-                message="Either Phrases or VocabularyFileUri field should be provided.",
+                message="Either Phrases or VocabularyFileUri field should be provided."
             )
         if phrases is not None and len(phrases) < 1:
             raise BadRequestException(
                 message="1 validation error detected: Value '[]' at 'phrases' failed to "
                 "satisfy constraint: Member must have length greater than or "
-                "equal to 1",
+                "equal to 1"
             )
         if vocabulary_name in self.vocabularies:
             raise ConflictException(
@@ -806,6 +806,4 @@ class TranscribeBackend(BaseBackend):
         return response
 
 
-transcribe_backends = {}
-for region, ec2_backend in ec2_backends.items():
-    transcribe_backends[region] = TranscribeBackend(region_name=region)
+transcribe_backends = BackendDict(TranscribeBackend, "transcribe")

@@ -1,13 +1,9 @@
-from boto3 import Session
 from moto.core import BaseBackend, BaseModel
 from datetime import datetime
-from .exceptions import (
-    ResourceNotFoundException,
-    ResourceInUseException,
-)
+from .exceptions import ResourceNotFoundException, ResourceInUseException
 import random
 import string
-from moto.core.utils import get_random_hex
+from moto.core.utils import get_random_hex, BackendDict
 from moto.core import ACCOUNT_ID
 
 
@@ -65,7 +61,7 @@ class Stream(BaseModel):
 
 class KinesisVideoBackend(BaseBackend):
     def __init__(self, region_name=None):
-        super(KinesisVideoBackend, self).__init__()
+        super().__init__()
         self.region_name = region_name
         self.streams = {}
 
@@ -117,12 +113,18 @@ class KinesisVideoBackend(BaseBackend):
         stream_info = stream.to_dict()
         return stream_info
 
-    def list_streams(self, max_results, next_token, stream_name_condition):
+    def list_streams(self):
+        """
+        Pagination and the StreamNameCondition-parameter are not yet implemented
+        """
         stream_info_list = [_.to_dict() for _ in self.streams.values()]
         next_token = None
         return stream_info_list, next_token
 
-    def delete_stream(self, stream_arn, current_version):
+    def delete_stream(self, stream_arn):
+        """
+        The CurrentVersion-parameter is not yet implemented
+        """
         stream = self.streams.get(stream_arn)
         if stream is None:
             raise ResourceNotFoundException()
@@ -135,12 +137,4 @@ class KinesisVideoBackend(BaseBackend):
     # add methods from here
 
 
-kinesisvideo_backends = {}
-for region in Session().get_available_regions("kinesisvideo"):
-    kinesisvideo_backends[region] = KinesisVideoBackend(region)
-for region in Session().get_available_regions(
-    "kinesisvideo", partition_name="aws-us-gov"
-):
-    kinesisvideo_backends[region] = KinesisVideoBackend(region)
-for region in Session().get_available_regions("kinesisvideo", partition_name="aws-cn"):
-    kinesisvideo_backends[region] = KinesisVideoBackend(region)
+kinesisvideo_backends = BackendDict(KinesisVideoBackend, "kinesisvideo")

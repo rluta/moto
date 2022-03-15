@@ -41,8 +41,8 @@ class SageMakerResponse(BaseResponse):
         models = self.sagemaker_backend.list_models(**self.request_params)
         return json.dumps({"Models": [model.response_object for model in models]})
 
-    def _get_param(self, param, if_none=None):
-        return self.request_params.get(param, if_none)
+    def _get_param(self, param_name, if_none=None):
+        return self.request_params.get(param_name, if_none)
 
     @amzn_request_id
     def create_notebook_instance(self):
@@ -235,7 +235,6 @@ class SageMakerResponse(BaseResponse):
                 processing_inputs=self._get_param("ProcessingInputs"),
                 processing_job_name=self._get_param("ProcessingJobName"),
                 processing_output_config=self._get_param("ProcessingOutputConfig"),
-                processing_resources=self._get_param("ProcessingResources"),
                 role_arn=self._get_param("RoleArn"),
                 stopping_condition=self._get_param("StoppingCondition"),
             )
@@ -303,12 +302,14 @@ class SageMakerResponse(BaseResponse):
     @amzn_request_id
     def create_notebook_instance_lifecycle_config(self):
         try:
-            lifecycle_configuration = self.sagemaker_backend.create_notebook_instance_lifecycle_config(
-                notebook_instance_lifecycle_config_name=self._get_param(
-                    "NotebookInstanceLifecycleConfigName"
-                ),
-                on_create=self._get_param("OnCreate"),
-                on_start=self._get_param("OnStart"),
+            lifecycle_configuration = (
+                self.sagemaker_backend.create_notebook_instance_lifecycle_config(
+                    notebook_instance_lifecycle_config_name=self._get_param(
+                        "NotebookInstanceLifecycleConfigName"
+                    ),
+                    on_create=self._get_param("OnCreate"),
+                    on_start=self._get_param("OnStart"),
+                )
             )
             response = {
                 "NotebookInstanceLifecycleConfigArn": lifecycle_configuration.notebook_instance_lifecycle_config_arn,
@@ -345,40 +346,86 @@ class SageMakerResponse(BaseResponse):
 
     @amzn_request_id
     def list_experiments(self):
-        response = self.sagemaker_backend.list_experiments()
+        MaxResults = self._get_param("MaxResults")
+        NextToken = self._get_param("NextToken")
+
+        paged_results, next_token = self.sagemaker_backend.list_experiments(
+            MaxResults=MaxResults, NextToken=NextToken
+        )
+
+        experiment_summaries = [
+            {
+                "ExperimentName": experiment_data.experiment_name,
+                "ExperimentArn": experiment_data.experiment_arn,
+                "CreationTime": experiment_data.creation_time,
+                "LastModifiedTime": experiment_data.last_modified_time,
+            }
+            for experiment_data in paged_results
+        ]
+
+        response = {
+            "ExperimentSummaries": experiment_summaries,
+        }
+
+        if next_token:
+            response["NextToken"] = next_token
+
         return 200, {}, json.dumps(response)
 
     @amzn_request_id
     def delete_experiment(self):
         self.sagemaker_backend.delete_experiment(
-            experiment_name=self._get_param("ExperimentName"),
+            experiment_name=self._get_param("ExperimentName")
         )
         return 200, {}, json.dumps({})
 
     @amzn_request_id
-    def create_experiment(self, *args, **kwargs):
+    def create_experiment(self):
         response = self.sagemaker_backend.create_experiment(
-            experiment_name=self._get_param("ExperimentName"),
+            experiment_name=self._get_param("ExperimentName")
         )
         return 200, {}, json.dumps(response)
 
     @amzn_request_id
-    def describe_experiment(self, *args, **kwargs):
+    def describe_experiment(self):
         response = self.sagemaker_backend.describe_experiment(
-            experiment_name=self._get_param("ExperimentName"),
+            experiment_name=self._get_param("ExperimentName")
         )
         return 200, {}, json.dumps(response)
 
     @amzn_request_id
     def list_trials(self):
-        response = self.sagemaker_backend.list_trials(
+        MaxResults = self._get_param("MaxResults")
+        NextToken = self._get_param("NextToken")
+
+        paged_results, next_token = self.sagemaker_backend.list_trials(
+            NextToken=NextToken,
+            MaxResults=MaxResults,
             experiment_name=self._get_param("ExperimentName"),
             trial_component_name=self._get_param("TrialComponentName"),
         )
+
+        trial_summaries = [
+            {
+                "TrialName": trial_data.trial_name,
+                "TrialArn": trial_data.trial_arn,
+                "CreationTime": trial_data.creation_time,
+                "LastModifiedTime": trial_data.last_modified_time,
+            }
+            for trial_data in paged_results
+        ]
+
+        response = {
+            "TrialSummaries": trial_summaries,
+        }
+
+        if next_token:
+            response["NextToken"] = next_token
+
         return 200, {}, json.dumps(response)
 
     @amzn_request_id
-    def create_trial(self, *args, **kwargs):
+    def create_trial(self):
         try:
             response = self.sagemaker_backend.create_trial(
                 trial_name=self._get_param("TrialName"),
@@ -390,13 +437,36 @@ class SageMakerResponse(BaseResponse):
 
     @amzn_request_id
     def list_trial_components(self):
-        response = self.sagemaker_backend.list_trial_components(
+        MaxResults = self._get_param("MaxResults")
+        NextToken = self._get_param("NextToken")
+
+        paged_results, next_token = self.sagemaker_backend.list_trial_components(
+            NextToken=NextToken,
+            MaxResults=MaxResults,
             trial_name=self._get_param("TrialName"),
         )
+
+        trial_component_summaries = [
+            {
+                "TrialComponentName": trial_component_data.trial_component_name,
+                "TrialComponentArn": trial_component_data.trial_component_arn,
+                "CreationTime": trial_component_data.creation_time,
+                "LastModifiedTime": trial_component_data.last_modified_time,
+            }
+            for trial_component_data in paged_results
+        ]
+
+        response = {
+            "TrialComponentSummaries": trial_component_summaries,
+        }
+
+        if next_token:
+            response["NextToken"] = next_token
+
         return 200, {}, json.dumps(response)
 
     @amzn_request_id
-    def create_trial_component(self, *args, **kwargs):
+    def create_trial_component(self):
         try:
             response = self.sagemaker_backend.create_trial_component(
                 trial_component_name=self._get_param("TrialComponentName"),
@@ -407,7 +477,7 @@ class SageMakerResponse(BaseResponse):
             return err.response()
 
     @amzn_request_id
-    def describe_trial(self, *args, **kwargs):
+    def describe_trial(self):
         trial_name = self._get_param("TrialName")
         response = self.sagemaker_backend.describe_trial(trial_name)
         return json.dumps(response)
@@ -425,25 +495,25 @@ class SageMakerResponse(BaseResponse):
         return 200, {}, json.dumps({})
 
     @amzn_request_id
-    def describe_trial_component(self, *args, **kwargs):
+    def describe_trial_component(self):
         trial_component_name = self._get_param("TrialComponentName")
         response = self.sagemaker_backend.describe_trial_component(trial_component_name)
         return json.dumps(response)
 
     @amzn_request_id
-    def associate_trial_component(self, *args, **kwargs):
+    def associate_trial_component(self):
         response = self.sagemaker_backend.associate_trial_component(self.request_params)
         return 200, {}, json.dumps(response)
 
     @amzn_request_id
-    def disassociate_trial_component(self, *args, **kwargs):
+    def disassociate_trial_component(self):
         response = self.sagemaker_backend.disassociate_trial_component(
             self.request_params
         )
         return 200, {}, json.dumps(response)
 
     @amzn_request_id
-    def list_associations(self, *args, **kwargs):
+    def list_associations(self, *args, **kwargs):  # pylint: disable=unused-argument
         response = self.sagemaker_backend.list_associations(self.request_params)
         return 200, {}, json.dumps(response)
 
@@ -502,8 +572,6 @@ class SageMakerResponse(BaseResponse):
                 last_modified_time_before=self._get_param("LastModifiedTimeBefore"),
                 name_contains=self._get_param("NameContains"),
                 status_equals=status_equals,
-                sort_by=sort_by,
-                sort_order=sort_order,
             )
             return 200, {}, json.dumps(response)
         except AWSError as err:
@@ -564,8 +632,6 @@ class SageMakerResponse(BaseResponse):
                 last_modified_time_before=self._get_param("LastModifiedTimeBefore"),
                 name_contains=self._get_param("NameContains"),
                 status_equals=status_equals,
-                sort_by=sort_by,
-                sort_order=sort_order,
             )
             return 200, {}, json.dumps(response)
         except AWSError as err:

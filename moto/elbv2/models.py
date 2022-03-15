@@ -4,13 +4,13 @@ from jinja2 import Template
 from botocore.exceptions import ParamValidationError
 from collections import OrderedDict
 from moto.core.exceptions import RESTError
-from moto.core import BaseBackend, BaseModel, CloudFormationModel
+from moto.core import ACCOUNT_ID, BaseBackend, BaseModel, CloudFormationModel
 from moto.core.utils import (
     iso_8601_datetime_with_milliseconds,
     get_random_hex,
+    BackendDict,
 )
 from moto.ec2.models import ec2_backends
-from moto.acm.models import acm_backends
 from .utils import make_arn_for_target_group
 from .utils import make_arn_for_load_balancer
 from .exceptions import (
@@ -61,6 +61,7 @@ class FakeTargetGroup(CloudFormationModel):
         vpc_id,
         protocol,
         port,
+        protocol_version=None,
         healthcheck_protocol=None,
         healthcheck_port=None,
         healthcheck_path=None,
@@ -78,6 +79,7 @@ class FakeTargetGroup(CloudFormationModel):
         self.arn = arn
         self.vpc_id = vpc_id
         self.protocol = protocol
+        self.protocol_version = protocol_version or "HTTP1"
         self.port = port
         self.healthcheck_protocol = healthcheck_protocol or self.protocol
         self.healthcheck_port = healthcheck_port
@@ -297,9 +299,7 @@ class FakeListener(CloudFormationModel):
 
 
 class FakeListenerRule(CloudFormationModel):
-    def __init__(
-        self, listener_arn, arn, conditions, priority, actions,
-    ):
+    def __init__(self, listener_arn, arn, conditions, priority, actions):
         self.listener_arn = listener_arn
         self.arn = arn
         self.conditions = conditions
@@ -425,6 +425,7 @@ class FakeLoadBalancer(CloudFormationModel):
         "access_logs.s3.prefix",
         "deletion_protection.enabled",
         "idle_timeout.timeout_seconds",
+        "load_balancing.cross_zone.enabled",
         "routing.http2.enabled",
         "routing.http.drop_invalid_header_fields.enabled",
     }
@@ -514,8 +515,8 @@ class FakeLoadBalancer(CloudFormationModel):
         return load_balancer
 
     @classmethod
-    def has_cfn_attr(cls, attribute):
-        return attribute in [
+    def has_cfn_attr(cls, attr):
+        return attr in [
             "DNSName",
             "LoadBalancerName",
             "CanonicalHostedZoneID",
@@ -578,16 +579,6 @@ class ELBv2Backend(BaseBackend):
         """
         return ec2_backends[self.region_name]
 
-    @property
-    def acm_backend(self):
-        """
-        ACM backend
-
-        :return: ACM Backend
-        :rtype: moto.acm.models.AWSCertificateManagerBackend
-        """
-        return acm_backends[self.region_name]
-
     def reset(self):
         region_name = self.region_name
         self.__dict__ = {}
@@ -615,7 +606,7 @@ class ELBv2Backend(BaseBackend):
 
         vpc_id = subnets[0].vpc_id
         arn = make_arn_for_load_balancer(
-            account_id=1, name=name, region_name=self.region_name
+            account_id=ACCOUNT_ID, name=name, region_name=self.region_name
         )
         dns_name = "%s-1.%s.elb.amazonaws.com" % (name, self.region_name)
 
@@ -683,7 +674,7 @@ class ELBv2Backend(BaseBackend):
         # TODO: check for error 'TooManyRules'
 
         # create rule
-        rule = FakeListenerRule(listener.arn, arn, conditions, priority, actions,)
+        rule = FakeListenerRule(listener.arn, arn, conditions, priority, actions)
         listener.register(arn, rule)
         return rule
 
@@ -821,6 +812,17 @@ class ELBv2Backend(BaseBackend):
                 "A 'QueryStringConfig' must be specified with 'query-string'"
             )
 
+    def _get_target_group_arns_from(self, action_data):
+        if "TargetGroupArn" in action_data:
+            return [action_data["TargetGroupArn"]]
+        elif "ForwardConfig" in action_data:
+            return [
+                tg["TargetGroupArn"]
+                for tg in action_data["ForwardConfig"].get("TargetGroups", [])
+            ]
+        else:
+            return []
+
     def _validate_actions(self, actions):
         # validate Actions
         target_group_arns = [
@@ -829,10 +831,11 @@ class ELBv2Backend(BaseBackend):
         for i, action in enumerate(actions):
             index = i + 1
             action_type = action.type
-            if action_type == "forward" and "TargetGroupArn" in action.data:
-                action_target_group_arn = action.data["TargetGroupArn"]
-                if action_target_group_arn not in target_group_arns:
-                    raise ActionTargetGroupNotFoundError(action_target_group_arn)
+            if action_type == "forward":
+                found_arns = self._get_target_group_arns_from(action_data=action.data)
+                for target_group_arn in found_arns:
+                    if target_group_arn not in target_group_arns:
+                        raise ActionTargetGroupNotFoundError(target_group_arn)
             elif action_type == "fixed-response":
                 self._validate_fixed_response_action(action, i, index)
             elif action_type in ["redirect", "authenticate-cognito"]:
@@ -899,7 +902,7 @@ Member must satisfy regular expression pattern: {}".format(
             if target_group.name == name:
                 raise DuplicateTargetGroupName()
 
-        valid_protocols = ["HTTPS", "HTTP", "TCP"]
+        valid_protocols = ["HTTPS", "HTTP", "TCP", "TLS", "UDP", "TCP_UDP", "GENEVE"]
         if (
             kwargs.get("healthcheck_protocol")
             and kwargs["healthcheck_protocol"] not in valid_protocols
@@ -929,11 +932,18 @@ Member must satisfy regular expression pattern: {}".format(
             )
 
         arn = make_arn_for_target_group(
-            account_id=1, name=name, region_name=self.region_name
+            account_id=ACCOUNT_ID, name=name, region_name=self.region_name
         )
         target_group = FakeTargetGroup(name, arn, **kwargs)
         self.target_groups[target_group.arn] = target_group
         return target_group
+
+    def modify_target_group_attributes(self, target_group_arn, attributes):
+        target_group = self.target_groups.get(target_group_arn)
+        if not target_group:
+            raise TargetGroupNotFoundError()
+
+        target_group.attributes.update(attributes)
 
     def convert_and_validate_certificates(self, certificates):
 
@@ -998,8 +1008,10 @@ Member must satisfy regular expression pattern: {}".format(
         balancer.listeners[listener.arn] = listener
         for action in default_actions:
             if action.type == "forward":
-                target_group = self.target_groups[action.data["TargetGroupArn"]]
-                target_group.load_balancer_arns.append(load_balancer_arn)
+                found_arns = self._get_target_group_arns_from(action_data=action.data)
+                for arn in found_arns:
+                    target_group = self.target_groups[arn]
+                    target_group.load_balancer_arns.append(load_balancer_arn)
 
         return listener
 
@@ -1340,7 +1352,7 @@ Member must satisfy regular expression pattern: {}".format(
                 "HttpCode must be like 200 | 200-399 | 200,201 ...",
             )
 
-        if http_codes is not None:
+        if http_codes is not None and target_group.protocol in ["HTTP", "HTTPS"]:
             target_group.matcher["HttpCode"] = http_codes
         if health_check_interval is not None:
             target_group.healthcheck_interval_seconds = health_check_interval
@@ -1380,40 +1392,35 @@ Member must satisfy regular expression pattern: {}".format(
         listener = load_balancer.listeners[arn]
 
         if port is not None:
-            for listener_arn, current_listener in load_balancer.listeners.items():
-                if listener_arn == arn:
-                    continue
-
             listener.port = port
 
-        if protocol is not None:
-            if protocol not in ("HTTP", "HTTPS", "TCP"):
+        if protocol not in (None, "HTTP", "HTTPS", "TCP"):
+            raise RESTError(
+                "UnsupportedProtocol", "Protocol {0} is not supported".format(protocol)
+            )
+
+        # HTTPS checks
+        protocol_becomes_https = protocol == "HTTPS"
+        protocol_stays_https = protocol is None and listener.protocol == "HTTPS"
+        if protocol_becomes_https or protocol_stays_https:
+            # Check certificates exist
+            if certificates:
+                default_cert = certificates[0]
+                default_cert_arn = default_cert["certificate_arn"]
+                if not self._certificate_exists(certificate_arn=default_cert_arn):
+                    raise RESTError(
+                        "CertificateNotFound",
+                        "Certificate {0} not found".format(default_cert_arn),
+                    )
+                listener.certificate = default_cert_arn
+                listener.certificates = certificates
+            else:
                 raise RESTError(
-                    "UnsupportedProtocol",
-                    "Protocol {0} is not supported".format(protocol),
+                    "CertificateWereNotPassed",
+                    "You must provide a list containing exactly one certificate if the listener protocol is HTTPS.",
                 )
 
-            # HTTPS checks
-            if protocol == "HTTPS":
-                # Check certificates exist
-                if certificates:
-                    default_cert = certificates[0]
-                    default_cert_arn = default_cert["certificate_arn"]
-                    try:
-                        self.acm_backend.get_certificate(default_cert_arn)
-                    except Exception:
-                        raise RESTError(
-                            "CertificateNotFound",
-                            "Certificate {0} not found".format(default_cert_arn),
-                        )
-                    listener.certificate = default_cert_arn
-                    listener.certificates = certificates
-                else:
-                    raise RESTError(
-                        "CertificateWereNotPassed",
-                        "You must provide a list containing exactly one certificate if the listener protocol is HTTPS.",
-                    )
-
+        if protocol is not None:
             listener.protocol = protocol
 
         if ssl_policy is not None:
@@ -1427,12 +1434,39 @@ Member must satisfy regular expression pattern: {}".format(
 
         return listener
 
+    def _certificate_exists(self, certificate_arn):
+        """
+        Verify the provided certificate exists in either ACM or IAM
+        """
+        from moto.acm import acm_backends
+        from moto.acm.models import AWSResourceNotFoundException
+
+        try:
+            acm_backend = acm_backends[self.region_name]
+            acm_backend.get_certificate(certificate_arn)
+            return True
+        except AWSResourceNotFoundException:
+            pass
+
+        from moto.iam import iam_backend
+
+        cert = iam_backend.get_certificate_by_arn(certificate_arn)
+        if cert is not None:
+            return True
+
+        # ACM threw an error, and IAM did not return a certificate
+        # Safe to assume it doesn't exist when we get here
+        return False
+
     def _any_listener_using(self, target_group_arn):
         for load_balancer in self.load_balancers.values():
             for listener in load_balancer.listeners.values():
                 for rule in listener.rules.values():
                     for action in rule.actions:
-                        if action.data.get("TargetGroupArn") == target_group_arn:
+                        found_arns = self._get_target_group_arns_from(
+                            action_data=action.data
+                        )
+                        if target_group_arn in found_arns:
                             return True
         return False
 
@@ -1441,6 +1475,4 @@ Member must satisfy regular expression pattern: {}".format(
             target_group.deregister_terminated_instances(instance_ids)
 
 
-elbv2_backends = {}
-for region in ec2_backends.keys():
-    elbv2_backends[region] = ELBv2Backend(region)
+elbv2_backends = BackendDict(ELBv2Backend, "ec2")

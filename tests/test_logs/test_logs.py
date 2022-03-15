@@ -4,13 +4,14 @@ import time
 import sure  # noqa # pylint: disable=unused-import
 from unittest import SkipTest
 from datetime import timedelta, datetime
+from uuid import UUID
 
 import boto3
 import pytest
 from botocore.exceptions import ClientError
 from freezegun import freeze_time
 
-from moto import mock_logs, settings
+from moto import mock_logs, mock_s3, settings
 from moto.core.utils import unix_time_millis
 from moto.logs.models import MAX_RESOURCE_POLICIES_PER_REGION
 
@@ -80,7 +81,7 @@ def test_describe_metric_filters_happy_metric_name():
     assert response2["ResponseMetadata"]["HTTPStatusCode"] == 200
 
     response = conn.describe_metric_filters(
-        metricName="metricName1", metricNamespace="metricNamespace1",
+        metricName="metricName1", metricNamespace="metricNamespace1"
     )
 
     assert len(response["metricFilters"]) == 1
@@ -111,9 +112,9 @@ def test_put_metric_filters_validation():
     ]
 
     test_cases = [
-        build_put_case(name="Invalid filter name", filter_name=invalid_filter_name,),
+        build_put_case(name="Invalid filter name", filter_name=invalid_filter_name),
         build_put_case(
-            name="Invalid filter pattern", filter_pattern=invalid_filter_pattern,
+            name="Invalid filter pattern", filter_pattern=invalid_filter_pattern
         ),
         build_put_case(
             name="Invalid filter metric transformations",
@@ -138,14 +139,14 @@ def test_describe_metric_filters_validation():
 
     test_cases = [
         build_describe_case(
-            name="Invalid filter name prefix", filter_name_prefix=length_over_512,
+            name="Invalid filter name prefix", filter_name_prefix=length_over_512
         ),
         build_describe_case(
-            name="Invalid log group name", log_group_name=length_over_512,
+            name="Invalid log group name", log_group_name=length_over_512
         ),
-        build_describe_case(name="Invalid metric name", metric_name=length_over_255,),
+        build_describe_case(name="Invalid metric name", metric_name=length_over_255),
         build_describe_case(
-            name="Invalid metric namespace", metric_namespace=length_over_255,
+            name="Invalid metric namespace", metric_namespace=length_over_255
         ),
     ]
 
@@ -650,6 +651,18 @@ def test_put_retention_policy():
 
 
 @mock_logs
+def test_delete_log_stream():
+    logs = boto3.client("logs", TEST_REGION)
+    logs.create_log_group(logGroupName="logGroup")
+    logs.create_log_stream(logGroupName="logGroup", logStreamName="logStream")
+    resp = logs.describe_log_streams(logGroupName="logGroup")
+    assert resp["logStreams"][0]["logStreamName"] == "logStream"
+    logs.delete_log_stream(logGroupName="logGroup", logStreamName="logStream")
+    resp = logs.describe_log_streams(logGroupName="logGroup")
+    assert resp["logStreams"] == []
+
+
+@mock_logs
 def test_delete_retention_policy():
     conn = boto3.client("logs", TEST_REGION)
     log_group_name = "dummy"
@@ -709,7 +722,7 @@ def test_put_resource_policy():
     with freeze_time(timedelta(minutes=1)):
         new_document = '{"Statement":[{"Action":"logs:*","Effect":"Allow","Principal":"*","Resource":"*"}]}'
         policy_info = client.put_resource_policy(
-            policyName=policy_name, policyDocument=new_document,
+            policyName=policy_name, policyDocument=new_document
         )["resourcePolicy"]
         assert policy_info["policyName"] == policy_name
         assert policy_info["policyDocument"] == new_document
@@ -1099,7 +1112,7 @@ def test_describe_subscription_filters_errors():
 
     # when
     with pytest.raises(ClientError) as exc:
-        client.describe_subscription_filters(logGroupName="not-existing-log-group",)
+        client.describe_subscription_filters(logGroupName="not-existing-log-group")
 
     # then
     exc_value = exc.value
@@ -1419,3 +1432,58 @@ def test_describe_log_streams_no_prefix():
     err["Message"].should.equal(
         "Cannot order by LastEventTime with a logStreamNamePrefix."
     )
+
+
+@mock_s3
+@mock_logs
+def test_create_export_task_happy_path():
+    log_group_name = "/aws/codebuild/blah1"
+    destination = "mybucket"
+    fromTime = 1611316574
+    to = 1642852574
+    logs = boto3.client("logs", region_name="ap-southeast-1")
+    s3 = boto3.client("s3")
+    logs.create_log_group(logGroupName=log_group_name)
+    s3.create_bucket(Bucket=destination)
+    resp = logs.create_export_task(
+        logGroupName=log_group_name, fromTime=fromTime, to=to, destination=destination
+    )
+    # taskId resembles a valid UUID (i.e. a string of 32 hexadecimal digits)
+    assert UUID(resp["taskId"])
+    assert resp["ResponseMetadata"]["HTTPStatusCode"] == 200
+
+
+@mock_logs
+def test_create_export_task_raises_ClientError_when_bucket_not_found():
+    log_group_name = "/aws/codebuild/blah1"
+    destination = "368a7022dea3dd621"
+    fromTime = 1611316574
+    to = 1642852574
+    logs = boto3.client("logs", region_name="ap-southeast-1")
+    logs.create_log_group(logGroupName=log_group_name)
+    with pytest.raises(ClientError):
+        logs.create_export_task(
+            logGroupName=log_group_name,
+            fromTime=fromTime,
+            to=to,
+            destination=destination,
+        )
+
+
+@mock_s3
+@mock_logs
+def test_create_export_raises_ResourceNotFoundException_log_group_not_found():
+    log_group_name = "/aws/codebuild/blah1"
+    destination = "mybucket"
+    fromTime = 1611316574
+    to = 1642852574
+    s3 = boto3.client("s3")
+    s3.create_bucket(Bucket=destination)
+    logs = boto3.client("logs", region_name="ap-southeast-1")
+    with pytest.raises(logs.exceptions.ResourceNotFoundException):
+        logs.create_export_task(
+            logGroupName=log_group_name,
+            fromTime=fromTime,
+            to=to,
+            destination=destination,
+        )

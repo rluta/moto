@@ -1,5 +1,5 @@
-from boto3 import Session
 from moto.core import ACCOUNT_ID, BaseBackend, BaseModel
+from moto.core.utils import BackendDict
 import random
 import string
 
@@ -63,7 +63,7 @@ class Pipeline(BaseModel):
 
 class ElasticTranscoderBackend(BaseBackend):
     def __init__(self, region_name=None):
-        super(ElasticTranscoderBackend, self).__init__()
+        super().__init__()
         self.region_name = region_name
         self.pipelines = {}
 
@@ -78,11 +78,13 @@ class ElasticTranscoderBackend(BaseBackend):
         input_bucket,
         output_bucket,
         role,
-        aws_kms_key_arn,
-        notifications,
         content_config,
         thumbnail_config,
     ):
+        """
+        The following parameters are not yet implemented:
+        AWSKMSKeyArn, Notifications
+        """
         pipeline = Pipeline(
             self.region_name,
             name,
@@ -99,21 +101,15 @@ class ElasticTranscoderBackend(BaseBackend):
     def list_pipelines(self):
         return [p.to_dict() for _, p in self.pipelines.items()]
 
-    def read_pipeline(self, id):
-        return self.pipelines[id]
+    def read_pipeline(self, pipeline_id):
+        return self.pipelines[pipeline_id]
 
-    def update_pipeline(
-        self,
-        id,
-        name,
-        input_bucket,
-        role,
-        aws_kms_key_arn,
-        notifications,
-        content_config,
-        thumbnail_config,
-    ):
-        pipeline = self.read_pipeline(id)
+    def update_pipeline(self, pipeline_id, name, input_bucket, role):
+        """
+        The following parameters are not yet implemented:
+        AWSKMSKeyArn, Notifications, ContentConfig, ThumbnailConfig
+        """
+        pipeline = self.read_pipeline(pipeline_id)
         pipeline.update(name, input_bucket, role)
         warnings = []
         return pipeline, warnings
@@ -122,14 +118,4 @@ class ElasticTranscoderBackend(BaseBackend):
         self.pipelines.pop(pipeline_id)
 
 
-elastictranscoder_backends = {}
-for region in Session().get_available_regions("elastictranscoder"):
-    elastictranscoder_backends[region] = ElasticTranscoderBackend(region)
-for region in Session().get_available_regions(
-    "elastictranscoder", partition_name="aws-us-gov"
-):
-    elastictranscoder_backends[region] = ElasticTranscoderBackend(region)
-for region in Session().get_available_regions(
-    "elastictranscoder", partition_name="aws-cn"
-):
-    elastictranscoder_backends[region] = ElasticTranscoderBackend(region)
+elastictranscoder_backends = BackendDict(ElasticTranscoderBackend, "elastictranscoder")

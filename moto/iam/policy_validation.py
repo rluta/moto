@@ -233,10 +233,7 @@ class IAMPolicyDocumentValidator:
             assert isinstance(statement["Condition"], dict)
             for condition_key, condition_value in statement["Condition"].items():
                 assert isinstance(condition_value, dict)
-                for (
-                    condition_element_key,
-                    condition_element_value,
-                ) in condition_value.items():
+                for condition_element_value in condition_value.values():
                     assert isinstance(condition_element_value, (list, str))
 
                 if (
@@ -343,8 +340,8 @@ class IAMPolicyDocumentValidator:
             resource_partitions = resource.partition(":")
 
             if resource_partitions[1] == "":
-                self._resource_error = 'Resource {resource} must be in ARN format or "*".'.format(
-                    resource=resource
+                self._resource_error = (
+                    f'Resource {resource} must be in ARN format or "*".'
                 )
                 return
 
@@ -390,15 +387,14 @@ class IAMPolicyDocumentValidator:
 
             service = resource_partitions[0]
 
-            if service in SERVICE_TYPE_REGION_INFORMATION_ERROR_ASSOCIATIONS.keys() and not resource_partitions[
-                2
-            ].startswith(
-                ":"
+            if (
+                service in SERVICE_TYPE_REGION_INFORMATION_ERROR_ASSOCIATIONS.keys()
+                and not resource_partitions[2].startswith(":")
             ):
-                self._resource_error = SERVICE_TYPE_REGION_INFORMATION_ERROR_ASSOCIATIONS[
-                    service
-                ].format(
-                    resource=resource
+                self._resource_error = (
+                    SERVICE_TYPE_REGION_INFORMATION_ERROR_ASSOCIATIONS[service].format(
+                        resource=resource
+                    )
                 )
                 return
 
@@ -455,10 +451,7 @@ class IAMPolicyDocumentValidator:
         )
 
         if stripped_condition_key.startswith("Date"):
-            for (
-                condition_element_key,
-                condition_element_value,
-            ) in condition_value.items():
+            for condition_element_value in condition_value.values():
                 if isinstance(condition_element_value, str):
                     IAMPolicyDocumentValidator._legacy_parse_date_condition_value(
                         condition_element_value
@@ -520,8 +513,8 @@ class IAMPolicyDocumentValidator:
                     assert 0 <= int(time_zone_minutes) <= 59
             else:
                 seconds_with_decimal_fraction = time_parts[2]
-            seconds_with_decimal_fraction_partition = seconds_with_decimal_fraction.partition(
-                "."
+            seconds_with_decimal_fraction_partition = (
+                seconds_with_decimal_fraction.partition(".")
             )
             seconds = seconds_with_decimal_fraction_partition[0]
             assert 0 <= int(seconds) <= 59

@@ -49,6 +49,16 @@ class InvalidDHCPOptionsIdError(EC2ClientError):
         )
 
 
+class InvalidRequest(EC2ClientError):
+    def __init__(self):
+        super().__init__("InvalidRequest", "The request received was invalid")
+
+
+class InvalidParameterCombination(EC2ClientError):
+    def __init__(self, msg):
+        super().__init__("InvalidParameterCombination", msg)
+
+
 class MalformedDHCPOptionsIdError(EC2ClientError):
     def __init__(self, dhcp_options_id):
         super().__init__(
@@ -82,7 +92,7 @@ class InvalidVPCIdError(EC2ClientError):
     def __init__(self, vpc_id):
 
         super().__init__(
-            "InvalidVpcID.NotFound", "VpcID {0} does not exist.".format(vpc_id),
+            "InvalidVpcID.NotFound", "VpcID {0} does not exist.".format(vpc_id)
         )
 
 
@@ -223,10 +233,13 @@ class InvalidRouteError(EC2ClientError):
 
 class InvalidInstanceIdError(EC2ClientError):
     def __init__(self, instance_id):
-        super().__init__(
-            "InvalidInstanceID.NotFound",
-            "The instance ID '{0}' does not exist".format(instance_id),
-        )
+        if isinstance(instance_id, str):
+            instance_id = [instance_id]
+        if len(instance_id) > 1:
+            msg = f"The instance IDs '{', '.join(instance_id)}' do not exist"
+        else:
+            msg = f"The instance ID '{instance_id[0]}' does not exist"
+        super().__init__("InvalidInstanceID.NotFound", msg)
 
 
 class InvalidInstanceTypeError(EC2ClientError):
@@ -264,10 +277,17 @@ class MalformedAMIIdError(EC2ClientError):
 
 
 class InvalidSnapshotIdError(EC2ClientError):
-    def __init__(self, snapshot_id):
+    def __init__(self):
+        # Note: AWS returns empty message for this, as of 2014.08.22.
+        super().__init__("InvalidSnapshot.NotFound", "")
+
+
+class InvalidSnapshotInUse(EC2ClientError):
+    def __init__(self, snapshot_id, ami_id):
         super().__init__(
-            "InvalidSnapshot.NotFound", ""
-        )  # Note: AWS returns empty message for this, as of 2014.08.22.
+            "InvalidSnapshot.InUse",
+            f"The snapshot {snapshot_id} is currently in use by {ami_id}",
+        )
 
 
 class InvalidVolumeIdError(EC2ClientError):
@@ -397,7 +417,7 @@ class InvalidDependantParameterError(EC2ClientError):
         super().__init__(
             "InvalidParameter",
             "{0} can't be empty if {1} is {2}.".format(
-                dependant_parameter, parameter, parameter_value,
+                dependant_parameter, parameter, parameter_value
             ),
         )
 
@@ -407,16 +427,14 @@ class InvalidDependantParameterTypeError(EC2ClientError):
         super().__init__(
             "InvalidParameter",
             "{0} type must be {1} if {2} is provided.".format(
-                dependant_parameter, parameter_value, parameter,
+                dependant_parameter, parameter_value, parameter
             ),
         )
 
 
 class InvalidAggregationIntervalParameterError(EC2ClientError):
     def __init__(self, parameter):
-        super().__init__(
-            "InvalidParameter", "Invalid {0}".format(parameter),
-        )
+        super().__init__("InvalidParameter", "Invalid {0}".format(parameter))
 
 
 class InvalidParameterValueError(EC2ClientError):
@@ -720,4 +738,20 @@ class InvalidCarrierGatewayID(EC2ClientError):
         super().__init__(
             "InvalidCarrierGatewayID.NotFound",
             "The CarrierGateway ID '{0}' does not exist".format(carrier_gateway_id),
+        )
+
+
+class NoLoadBalancersProvided(EC2ClientError):
+    def __init__(self):
+        super().__init__(
+            "InvalidParameter",
+            "exactly one of network_load_balancer_arn or gateway_load_balancer_arn is a required member",
+        )
+
+
+class UnknownVpcEndpointService(EC2ClientError):
+    def __init__(self, service_id):
+        super().__init__(
+            "InvalidVpcEndpointServiceId.NotFound",
+            f"The VpcEndpointService Id '{service_id}' does not exist",
         )

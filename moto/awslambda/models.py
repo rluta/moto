@@ -22,14 +22,12 @@ import threading
 import weakref
 import requests.exceptions
 
-from boto3 import Session
-
 from moto.awslambda.policy import Policy
 from moto.core import BaseBackend, CloudFormationModel
 from moto.core.exceptions import RESTError
 from moto.iam.models import iam_backend
 from moto.iam.exceptions import IAMNotFoundException
-from moto.core.utils import unix_time_millis
+from moto.core.utils import unix_time_millis, BackendDict
 from moto.s3.models import s3_backend
 from moto.logs.models import logs_backends
 from moto.s3.exceptions import MissingBucket, MissingKey
@@ -47,7 +45,7 @@ from .utils import (
     split_layer_arn,
 )
 from moto.sqs import sqs_backends
-from moto.dynamodb2 import dynamodb_backends2
+from moto.dynamodb import dynamodb_backends
 from moto.dynamodbstreams import dynamodbstreams_backends
 from moto.core import ACCOUNT_ID
 from moto.utilities.docker_utilities import DockerModel, parse_image_ref
@@ -273,11 +271,7 @@ class LayerVersion(CloudFormationModel):
         cls, resource_name, cloudformation_json, region_name, **kwargs
     ):
         properties = cloudformation_json["Properties"]
-        optional_properties = (
-            "Description",
-            "CompatibleRuntimes",
-            "LicenseInfo",
-        )
+        optional_properties = ("Description", "CompatibleRuntimes", "LicenseInfo")
 
         # required
         spec = {
@@ -318,7 +312,7 @@ class Layer(object):
 
 
 class LambdaFunction(CloudFormationModel, DockerModel):
-    def __init__(self, spec, region, validate_s3=True, version=1):
+    def __init__(self, spec, region, version=1):
         DockerModel.__init__(self)
         # required
         self.region = region
@@ -336,9 +330,13 @@ class LambdaFunction(CloudFormationModel, DockerModel):
         # optional
         self.description = spec.get("Description", "")
         self.memory_size = spec.get("MemorySize", 128)
+        self.package_type = spec.get("PackageType", None)
         self.publish = spec.get("Publish", False)  # this is ignored currently
         self.timeout = spec.get("Timeout", 3)
         self.layers = self._get_layers_data(spec.get("Layers", []))
+        self.signing_profile_version_arn = spec.get("SigningProfileVersionArn")
+        self.signing_job_arn = spec.get("SigningJobArn")
+        self.code_signing_config_arn = spec.get("CodeSigningConfigArn")
 
         self.logs_group_name = "/aws/lambda/{}".format(self.function_name)
 
@@ -415,6 +413,12 @@ class LambdaFunction(CloudFormationModel, DockerModel):
             )
         return [{"Arn": lv.arn, "CodeSize": lv.code_size} for lv in layer_versions]
 
+    def get_code_signing_config(self):
+        return {
+            "CodeSigningConfigArn": self.code_signing_config_arn,
+            "FunctionName": self.function_name,
+        }
+
     def get_configuration(self):
         config = {
             "CodeSha256": self.code_sha_256,
@@ -428,10 +432,13 @@ class LambdaFunction(CloudFormationModel, DockerModel):
             "Role": self.role,
             "Runtime": self.run_time,
             "State": self.state,
+            "PackageType": self.package_type,
             "Timeout": self.timeout,
             "Version": str(self.version),
             "VpcConfig": self.vpc_config,
             "Layers": self.layers,
+            "SigningProfileVersionArn": self.signing_profile_version_arn,
+            "SigningJobArn": self.signing_job_arn,
         }
         if self.environment_vars:
             config["Environment"] = {"Variables": self.environment_vars}
@@ -540,14 +547,12 @@ class LambdaFunction(CloudFormationModel, DockerModel):
         except Exception:
             return s
 
-    def _invoke_lambda(self, code, event=None, context=None):
+    def _invoke_lambda(self, event=None):
         # Create the LogGroup if necessary, to write the result to
         self.logs_backend.ensure_log_group(self.logs_group_name, [])
         # TODO: context not yet implemented
         if event is None:
             event = dict()
-        if context is None:
-            context = {}
         output = None
 
         try:
@@ -568,17 +573,30 @@ class LambdaFunction(CloudFormationModel, DockerModel):
             }
 
             env_vars.update(self.environment_vars)
+            env_vars["MOTO_HOST"] = settings.moto_server_host()
+            env_vars["MOTO_PORT"] = settings.moto_server_port()
+            env_vars[
+                "MOTO_HTTP_ENDPOINT"
+            ] = f'{env_vars["MOTO_HOST"]}:{env_vars["MOTO_PORT"]}'
 
             container = exit_code = None
             log_config = docker.types.LogConfig(type=docker.types.LogConfig.types.JSON)
 
             with _DockerDataVolumeContext(self) as data_vol:
                 try:
-                    run_kwargs = (
-                        dict(links={"motoserver": "motoserver"})
-                        if settings.TEST_SERVER_MODE
-                        else {}
-                    )
+                    run_kwargs = dict()
+                    network_name = settings.moto_network_name()
+                    network_mode = settings.moto_network_mode()
+                    if network_name:
+                        run_kwargs["network"] = network_name
+                    elif network_mode:
+                        run_kwargs["network_mode"] = network_mode
+                    elif settings.TEST_SERVER_MODE:
+                        # AWSLambda can make HTTP requests to a Docker container called 'motoserver'
+                        # Only works if our Docker-container is named 'motoserver'
+                        # TODO: should remove this and rely on 'network_mode' instead, as this is too tightly coupled with our own test setup
+                        run_kwargs["links"] = {"motoserver": "motoserver"}
+
                     # add host.docker.internal host on linux to emulate Mac + Windows behavior
                     #   for communication with other mock AWS services running on localhost
                     if platform == "linux" or platform == "linux2":
@@ -586,7 +604,8 @@ class LambdaFunction(CloudFormationModel, DockerModel):
                             "host.docker.internal": "host-gateway"
                         }
 
-                    image_ref = "lambci/lambda:{}".format(self.run_time)
+                    image_repo = settings.moto_lambda_image()
+                    image_ref = f"{image_repo}:{self.run_time}"
                     self.docker_client.images.pull(":".join(parse_image_ref(image_ref)))
                     container = self.docker_client.containers.run(
                         image_ref,
@@ -597,7 +616,7 @@ class LambdaFunction(CloudFormationModel, DockerModel):
                         environment=env_vars,
                         detach=True,
                         log_config=log_config,
-                        **run_kwargs
+                        **run_kwargs,
                     )
                 finally:
                     if container:
@@ -636,8 +655,12 @@ class LambdaFunction(CloudFormationModel, DockerModel):
     def save_logs(self, output):
         # Send output to "logs" backend
         invoke_id = uuid.uuid4().hex
-        log_stream_name = "{date.year}/{date.month:02d}/{date.day:02d}/[{version}]{invoke_id}".format(
-            date=datetime.datetime.utcnow(), version=self.version, invoke_id=invoke_id,
+        log_stream_name = (
+            "{date.year}/{date.month:02d}/{date.day:02d}/[{version}]{invoke_id}".format(
+                date=datetime.datetime.utcnow(),
+                version=self.version,
+                invoke_id=invoke_id,
+            )
         )
         self.logs_backend.create_log_stream(self.logs_group_name, log_stream_name)
         log_events = [
@@ -645,7 +668,7 @@ class LambdaFunction(CloudFormationModel, DockerModel):
             for line in output.splitlines()
         ]
         self.logs_backend.put_log_events(
-            self.logs_group_name, log_stream_name, log_events, None
+            self.logs_group_name, log_stream_name, log_events
         )
 
     def invoke(self, body, request_headers, response_headers):
@@ -656,7 +679,7 @@ class LambdaFunction(CloudFormationModel, DockerModel):
             body = "{}"
 
         # Get the invocation type:
-        res, errored, logs = self._invoke_lambda(code=self.code, event=body)
+        res, errored, logs = self._invoke_lambda(event=body)
         inv_type = request_headers.get("x-amz-invocation-type", "RequestResponse")
         if inv_type == "RequestResponse":
             encoded = base64.b64encode(logs.encode("utf-8"))
@@ -721,8 +744,8 @@ class LambdaFunction(CloudFormationModel, DockerModel):
         return fn
 
     @classmethod
-    def has_cfn_attr(cls, attribute):
-        return attribute in ["Arn"]
+    def has_cfn_attr(cls, attr):
+        return attr in ["Arn"]
 
     def get_cfn_attribute(self, attribute_name):
         from moto.cloudformation.exceptions import UnformattedGetAttTemplateException
@@ -733,7 +756,7 @@ class LambdaFunction(CloudFormationModel, DockerModel):
 
     @classmethod
     def update_from_cloudformation_json(
-        cls, new_resource_name, cloudformation_json, original_resource, region_name
+        cls, original_resource, new_resource_name, cloudformation_json, region_name
     ):
         updated_props = cloudformation_json["Properties"]
         original_resource.update_configuration(updated_props)
@@ -854,7 +877,7 @@ class EventSourceMapping(CloudFormationModel):
 
     @classmethod
     def update_from_cloudformation_json(
-        cls, new_resource_name, cloudformation_json, original_resource, region_name
+        cls, original_resource, new_resource_name, cloudformation_json, region_name
     ):
         properties = cloudformation_json["Properties"]
         event_source_uuid = original_resource.uuid
@@ -1106,6 +1129,56 @@ class LayerStorage(object):
 
 
 class LambdaBackend(BaseBackend):
+    """
+    Implementation of the AWS Lambda endpoint.
+    Invoking functions is supported - they will run inside a Docker container, emulating the real AWS behaviour as closely as possible.
+
+    It is possible to connect from AWS Lambdas to other services, as long as you are running Moto in ServerMode.
+    The Lambda has access to environment variables `MOTO_HOST` and `MOTO_PORT`, which can be used to build the url that MotoServer runs on:
+
+    .. sourcecode:: python
+
+        def lambda_handler(event, context):
+            host = os.environ.get("MOTO_HOST")
+            port = os.environ.get("MOTO_PORT")
+            url = host + ":" + port
+            ec2 = boto3.client('ec2', region_name='us-west-2', endpoint_url=url)
+
+            # Or even simpler:
+            full_url = os.environ.get("MOTO_HTTP_ENDPOINT")
+            ec2 = boto3.client("ec2", region_name="eu-west-1", endpoint_url=full_url)
+
+            ec2.do_whatever_inside_the_existing_moto_server()
+
+    Moto will run on port 5000 by default. This can be overwritten by setting an environment variable when starting Moto:
+
+    .. sourcecode:: bash
+
+        # This env var will be propagated to the Docker container running the Lambda functions
+        MOTO_PORT=5000 moto_server
+
+    The Docker container uses the default network mode, `bridge`.
+    The following environment variables are available for fine-grained control over the Docker connection options:
+
+    .. sourcecode:: bash
+
+        # Provide the name of a custom network to connect to
+        MOTO_DOCKER_NETWORK_NAME=mycustomnetwork moto_server
+
+        # Override the network mode
+        # For example, network_mode=host would use the network of the host machine
+        # Note that this option will be ignored if MOTO_DOCKER_NETWORK_NAME is also set
+        MOTO_DOCKER_NETWORK_MODE=host moto_server
+
+    The Docker images used by Moto are taken from the `lambci/lambda`-repo by default. Use the following environment variable to configure a different repo:
+
+    .. sourcecode:: bash
+
+        MOTO_DOCKER_LAMBDA_IMAGE=mLupin/docker-lambda
+
+    .. note:: When using the decorators, a Docker container cannot reach Moto, as it does not run as a server. Any boto3-invocations used within your Lambda will try to connect to AWS.
+    """
+
     def __init__(self, region_name):
         self._lambdas = LambdaStorage()
         self._event_source_mappings = {}
@@ -1184,7 +1257,7 @@ class LambdaBackend(BaseBackend):
                 esm = EventSourceMapping(spec)
                 self._event_source_mappings[esm.uuid] = esm
                 table_name = stream["TableName"]
-                table = dynamodb_backends2[self.region_name].get_table(table_name)
+                table = dynamodb_backends[self.region_name].get_table(table_name)
                 table.lambda_event_source_mappings[esm.function_arn] = esm
                 return esm
         raise RESTError("ResourceNotFoundException", "Invalid EventSourceArn")
@@ -1398,6 +1471,10 @@ class LambdaBackend(BaseBackend):
         fn = self.get_function(function_name)
         fn.policy.del_statement(sid, revision)
 
+    def get_code_signing_config(self, function_name):
+        fn = self.get_function(function_name)
+        return fn.get_code_signing_config()
+
     def get_policy(self, function_name):
         fn = self.get_function(function_name)
         return fn.policy.get_policy()
@@ -1451,10 +1528,4 @@ def do_validate_s3():
     return os.environ.get("VALIDATE_LAMBDA_S3", "") in ["", "1", "true"]
 
 
-lambda_backends = {}
-for region in Session().get_available_regions("lambda"):
-    lambda_backends[region] = LambdaBackend(region)
-for region in Session().get_available_regions("lambda", partition_name="aws-us-gov"):
-    lambda_backends[region] = LambdaBackend(region)
-for region in Session().get_available_regions("lambda", partition_name="aws-cn"):
-    lambda_backends[region] = LambdaBackend(region)
+lambda_backends = BackendDict(LambdaBackend, "lambda")

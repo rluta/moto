@@ -123,10 +123,12 @@ class AssumedRoleAccessKey(object):
 
     @property
     def arn(self):
-        return "arn:aws:sts::{account_id}:assumed-role/{role_name}/{session_name}".format(
-            account_id=ACCOUNT_ID,
-            role_name=self._owner_role_name,
-            session_name=self._session_name,
+        return (
+            "arn:aws:sts::{account_id}:assumed-role/{role_name}/{session_name}".format(
+                account_id=ACCOUNT_ID,
+                role_name=self._owner_role_name,
+                session_name=self._session_name,
+            )
         )
 
     def create_credentials(self):
@@ -154,7 +156,7 @@ class AssumedRoleAccessKey(object):
 
 class CreateAccessKeyFailure(Exception):
     def __init__(self, reason, *args):
-        super(CreateAccessKeyFailure, self).__init__(*args)
+        super().__init__(*args)
         self.reason = reason
 
 

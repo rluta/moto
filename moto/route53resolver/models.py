@@ -4,11 +4,9 @@ from datetime import datetime, timezone
 from ipaddress import ip_address, ip_network, IPv4Address
 import re
 
-from boto3 import Session
-
 from moto.core import ACCOUNT_ID
 from moto.core import BaseBackend, BaseModel
-from moto.core.utils import get_random_hex
+from moto.core.utils import get_random_hex, BackendDict
 from moto.ec2 import ec2_backends
 from moto.ec2.exceptions import InvalidSubnetIdError
 from moto.ec2.exceptions import InvalidSecurityGroupNotFoundError
@@ -442,7 +440,7 @@ class Route53ResolverBackend(BaseBackend):
             ]
         )
         errmsg = self.tagger.validate_tags(
-            tags or [], limit=ResolverEndpoint.MAX_TAGS_PER_RESOLVER_ENDPOINT,
+            tags or [], limit=ResolverEndpoint.MAX_TAGS_PER_RESOLVER_ENDPOINT
         )
         if errmsg:
             raise TagValidationException(errmsg)
@@ -503,7 +501,7 @@ class Route53ResolverBackend(BaseBackend):
             ]
         )
         errmsg = self.tagger.validate_tags(
-            tags or [], limit=ResolverRule.MAX_TAGS_PER_RESOLVER_RULE,
+            tags or [], limit=ResolverRule.MAX_TAGS_PER_RESOLVER_RULE
         )
         if errmsg:
             raise TagValidationException(errmsg)
@@ -818,7 +816,7 @@ class Route53ResolverBackend(BaseBackend):
         """Add or overwrite one or more tags for specified resource."""
         self._matched_arn(resource_arn)
         errmsg = self.tagger.validate_tags(
-            tags, limit=ResolverEndpoint.MAX_TAGS_PER_RESOLVER_ENDPOINT,
+            tags, limit=ResolverEndpoint.MAX_TAGS_PER_RESOLVER_ENDPOINT
         )
         if errmsg:
             raise TagValidationException(errmsg)
@@ -838,20 +836,4 @@ class Route53ResolverBackend(BaseBackend):
         return resolver_endpoint
 
 
-route53resolver_backends = {}
-for available_region in Session().get_available_regions("route53resolver"):
-    route53resolver_backends[available_region] = Route53ResolverBackend(
-        available_region
-    )
-for available_region in Session().get_available_regions(
-    "route53resolver", partition_name="aws-us-gov"
-):
-    route53resolver_backends[available_region] = Route53ResolverBackend(
-        available_region
-    )
-for available_region in Session().get_available_regions(
-    "route53resolver", partition_name="aws-cn"
-):
-    route53resolver_backends[available_region] = Route53ResolverBackend(
-        available_region
-    )
+route53resolver_backends = BackendDict(Route53ResolverBackend, "route53resolver")

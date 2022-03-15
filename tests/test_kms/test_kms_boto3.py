@@ -82,14 +82,14 @@ def test_create_key():
     key["KeyMetadata"]["Origin"].should.equal("AWS_KMS")
     key["KeyMetadata"].should_not.have.key("SigningAlgorithms")
 
-    key = conn.create_key(KeyUsage="ENCRYPT_DECRYPT", CustomerMasterKeySpec="RSA_2048",)
+    key = conn.create_key(KeyUsage="ENCRYPT_DECRYPT", CustomerMasterKeySpec="RSA_2048")
 
     sorted(key["KeyMetadata"]["EncryptionAlgorithms"]).should.equal(
         ["RSAES_OAEP_SHA_1", "RSAES_OAEP_SHA_256"]
     )
     key["KeyMetadata"].should_not.have.key("SigningAlgorithms")
 
-    key = conn.create_key(KeyUsage="SIGN_VERIFY", CustomerMasterKeySpec="RSA_2048",)
+    key = conn.create_key(KeyUsage="SIGN_VERIFY", CustomerMasterKeySpec="RSA_2048")
 
     key["KeyMetadata"].should_not.have.key("EncryptionAlgorithms")
     sorted(key["KeyMetadata"]["SigningAlgorithms"]).should.equal(
@@ -104,22 +104,18 @@ def test_create_key():
     )
 
     key = conn.create_key(
-        KeyUsage="SIGN_VERIFY", CustomerMasterKeySpec="ECC_SECG_P256K1",
+        KeyUsage="SIGN_VERIFY", CustomerMasterKeySpec="ECC_SECG_P256K1"
     )
 
     key["KeyMetadata"].should_not.have.key("EncryptionAlgorithms")
     key["KeyMetadata"]["SigningAlgorithms"].should.equal(["ECDSA_SHA_256"])
 
-    key = conn.create_key(
-        KeyUsage="SIGN_VERIFY", CustomerMasterKeySpec="ECC_NIST_P384",
-    )
+    key = conn.create_key(KeyUsage="SIGN_VERIFY", CustomerMasterKeySpec="ECC_NIST_P384")
 
     key["KeyMetadata"].should_not.have.key("EncryptionAlgorithms")
     key["KeyMetadata"]["SigningAlgorithms"].should.equal(["ECDSA_SHA_384"])
 
-    key = conn.create_key(
-        KeyUsage="SIGN_VERIFY", CustomerMasterKeySpec="ECC_NIST_P521",
-    )
+    key = conn.create_key(KeyUsage="SIGN_VERIFY", CustomerMasterKeySpec="ECC_NIST_P521")
 
     key["KeyMetadata"].should_not.have.key("EncryptionAlgorithms")
     key["KeyMetadata"]["SigningAlgorithms"].should.equal(["ECDSA_SHA_512"])
@@ -129,7 +125,7 @@ def test_create_key():
 @mock_kms
 def test_describe_key(id_or_arn):
     client = boto3.client("kms", region_name="us-east-1")
-    response = client.create_key(Description="my key", KeyUsage="ENCRYPT_DECRYPT",)
+    response = client.create_key(Description="my key", KeyUsage="ENCRYPT_DECRYPT")
     key_id = response["KeyMetadata"][id_or_arn]
 
     response = client.describe_key(KeyId=key_id)
@@ -387,7 +383,7 @@ def test_disable_key():
     client.disable_key(KeyId=key["KeyMetadata"]["KeyId"])
 
     result = client.describe_key(KeyId=key["KeyMetadata"]["KeyId"])
-    assert result["KeyMetadata"]["Enabled"] == False
+    assert result["KeyMetadata"]["Enabled"] is False
     assert result["KeyMetadata"]["KeyState"] == "Disabled"
 
 
@@ -399,7 +395,7 @@ def test_enable_key():
     client.enable_key(KeyId=key["KeyMetadata"]["KeyId"])
 
     result = client.describe_key(KeyId=key["KeyMetadata"]["KeyId"])
-    assert result["KeyMetadata"]["Enabled"] == True
+    assert result["KeyMetadata"]["Enabled"] is True
     assert result["KeyMetadata"]["KeyState"] == "Enabled"
 
 
@@ -420,7 +416,7 @@ def test_schedule_key_deletion():
         assert response["KeyId"] == key["KeyMetadata"]["KeyId"]
 
     result = client.describe_key(KeyId=key["KeyMetadata"]["KeyId"])
-    assert result["KeyMetadata"]["Enabled"] == False
+    assert result["KeyMetadata"]["Enabled"] is False
     assert result["KeyMetadata"]["KeyState"] == "PendingDeletion"
     assert "DeletionDate" in result["KeyMetadata"]
 
@@ -446,7 +442,7 @@ def test_schedule_key_deletion_custom():
         assert response["KeyId"] == key["KeyMetadata"]["KeyId"]
 
     result = client.describe_key(KeyId=key["KeyMetadata"]["KeyId"])
-    assert result["KeyMetadata"]["Enabled"] == False
+    assert result["KeyMetadata"]["Enabled"] is False
     assert result["KeyMetadata"]["KeyState"] == "PendingDeletion"
     assert "DeletionDate" in result["KeyMetadata"]
 
@@ -460,7 +456,7 @@ def test_cancel_key_deletion():
     assert response["KeyId"] == key["KeyMetadata"]["KeyId"]
 
     result = client.describe_key(KeyId=key["KeyMetadata"]["KeyId"])
-    assert result["KeyMetadata"]["Enabled"] == False
+    assert result["KeyMetadata"]["Enabled"] is False
     assert result["KeyMetadata"]["KeyState"] == "Disabled"
     assert "DeletionDate" not in result["KeyMetadata"]
 
@@ -743,7 +739,7 @@ def test_generate_random(number_of_bytes):
 
 @pytest.mark.parametrize(
     "number_of_bytes,error_type",
-    [(2048, botocore.exceptions.ClientError), (1025, botocore.exceptions.ClientError),],
+    [(2048, botocore.exceptions.ClientError), (1025, botocore.exceptions.ClientError)],
 )
 @mock_kms
 def test_generate_random_invalid_number_of_bytes(number_of_bytes, error_type):
@@ -897,7 +893,7 @@ def test_list_key_policies():
 
 @pytest.mark.parametrize(
     "reserved_alias",
-    ["alias/aws/ebs", "alias/aws/s3", "alias/aws/redshift", "alias/aws/rds",],
+    ["alias/aws/ebs", "alias/aws/s3", "alias/aws/redshift", "alias/aws/rds"],
 )
 @mock_kms
 def test__create_alias__raises_if_reserved_alias(reserved_alias):
@@ -913,7 +909,7 @@ def test__create_alias__raises_if_reserved_alias(reserved_alias):
 
 
 @pytest.mark.parametrize(
-    "name", ["alias/my-alias!", "alias/my-alias$", "alias/my-alias@",]
+    "name", ["alias/my-alias!", "alias/my-alias$", "alias/my-alias@"]
 )
 @mock_kms
 def test__create_alias__raises_if_alias_has_restricted_characters(name):
@@ -1043,3 +1039,71 @@ def test__delete_alias__raises_if_alias_is_not_found():
     err["Message"].should.equal(
         f"Alias arn:aws:kms:us-east-1:{ACCOUNT_ID}:alias/unknown-alias is not found."
     )
+
+
+def sort(l):
+    return sorted(l, key=lambda d: d.keys())
+
+
+def _check_tags(key_id, created_tags, client):
+    result = client.list_resource_tags(KeyId=key_id)
+    actual = result.get("Tags", [])
+    assert sort(created_tags) == sort(actual)
+
+    client.untag_resource(KeyId=key_id, TagKeys=["key1"])
+
+    actual = client.list_resource_tags(KeyId=key_id).get("Tags", [])
+    expected = [{"TagKey": "key2", "TagValue": "value2"}]
+    assert sort(expected) == sort(actual)
+
+
+@mock_kms
+def test_key_tag_on_create_key_happy():
+    client = boto3.client("kms", region_name="us-east-1")
+
+    tags = [
+        {"TagKey": "key1", "TagValue": "value1"},
+        {"TagKey": "key2", "TagValue": "value2"},
+    ]
+    key = client.create_key(Description="test-key-tagging", Tags=tags)
+    _check_tags(key["KeyMetadata"]["KeyId"], tags, client)
+
+
+@mock_kms
+def test_key_tag_on_create_key_on_arn_happy():
+    client = boto3.client("kms", region_name="us-east-1")
+
+    tags = [
+        {"TagKey": "key1", "TagValue": "value1"},
+        {"TagKey": "key2", "TagValue": "value2"},
+    ]
+    key = client.create_key(Description="test-key-tagging", Tags=tags)
+    _check_tags(key["KeyMetadata"]["Arn"], tags, client)
+
+
+@mock_kms
+def test_key_tag_added_happy():
+    client = boto3.client("kms", region_name="us-east-1")
+
+    key = client.create_key(Description="test-key-tagging")
+    key_id = key["KeyMetadata"]["KeyId"]
+    tags = [
+        {"TagKey": "key1", "TagValue": "value1"},
+        {"TagKey": "key2", "TagValue": "value2"},
+    ]
+    client.tag_resource(KeyId=key_id, Tags=tags)
+    _check_tags(key_id, tags, client)
+
+
+@mock_kms
+def test_key_tag_added_arn_based_happy():
+    client = boto3.client("kms", region_name="us-east-1")
+
+    key = client.create_key(Description="test-key-tagging")
+    key_id = key["KeyMetadata"]["Arn"]
+    tags = [
+        {"TagKey": "key1", "TagValue": "value1"},
+        {"TagKey": "key2", "TagValue": "value2"},
+    ]
+    client.tag_resource(KeyId=key_id, Tags=tags)
+    _check_tags(key_id, tags, client)

@@ -1,9 +1,9 @@
 import uuid
-from boto3 import Session
 
 from moto.core import ACCOUNT_ID
 from moto.core import BaseBackend
 from moto.core.exceptions import RESTError
+from moto.core.utils import BackendDict
 
 from moto.s3 import s3_backends
 from moto.ec2 import ec2_backends
@@ -11,7 +11,7 @@ from moto.elb import elb_backends
 from moto.elbv2 import elbv2_backends
 from moto.kinesis import kinesis_backends
 from moto.kms import kms_backends
-from moto.rds2 import rds2_backends
+from moto.rds import rds_backends
 from moto.glacier import glacier_backends
 from moto.redshift import redshift_backends
 from moto.emr import emr_backends
@@ -24,7 +24,7 @@ from moto.awslambda import lambda_backends
 
 class ResourceGroupsTaggingAPIBackend(BaseBackend):
     def __init__(self, region_name=None):
-        super(ResourceGroupsTaggingAPIBackend, self).__init__()
+        super().__init__()
         self.region_name = region_name
 
         self._pages = {}
@@ -83,9 +83,9 @@ class ResourceGroupsTaggingAPIBackend(BaseBackend):
     @property
     def rds_backend(self):
         """
-        :rtype: moto.rds2.models.RDS2Backend
+        :rtype: moto.rds.models.RDSBackend
         """
-        return rds2_backends[self.region_name]
+        return rds_backends[self.region_name]
 
     @property
     def glacier_backend(self):
@@ -299,7 +299,7 @@ class ResourceGroupsTaggingAPIBackend(BaseBackend):
         # ELB, resource type elasticloadbalancing:loadbalancer
         def get_elbv2_tags(arn):
             result = []
-            for key, value in self.elbv2_backend.load_balancers[elb.arn].tags.items():
+            for key, value in self.elbv2_backend.load_balancers[arn].tags.items():
                 result.append({"Key": key, "Value": value})
             return result
 
@@ -318,9 +318,7 @@ class ResourceGroupsTaggingAPIBackend(BaseBackend):
         # ELB Target Group, resource type elasticloadbalancing:targetgroup
         def get_target_group_tags(arn):
             result = []
-            for key, value in self.elbv2_backend.target_groups[
-                target_group.arn
-            ].tags.items():
+            for key, value in self.elbv2_backend.target_groups[arn].tags.items():
                 result.append({"Key": key, "Value": value})
             return result
 
@@ -383,7 +381,22 @@ class ResourceGroupsTaggingAPIBackend(BaseBackend):
             or "rds" in resource_type_filters
             or "rds:snapshot" in resource_type_filters
         ):
-            for snapshot in self.rds_backend.snapshots.values():
+            for snapshot in self.rds_backend.database_snapshots.values():
+                tags = snapshot.get_tags()
+                if not tags or not tag_filter(tags):
+                    continue
+                yield {
+                    "ResourceARN": snapshot.snapshot_arn,
+                    "Tags": tags,
+                }
+
+        # RDS Cluster Snapshot
+        if (
+            not resource_type_filters
+            or "rds" in resource_type_filters
+            or "rds:cluster-snapshot" in resource_type_filters
+        ):
+            for snapshot in self.rds_backend.cluster_snapshots.values():
                 tags = snapshot.get_tags()
                 if not tags or not tag_filter(tags):
                     continue
@@ -729,14 +742,6 @@ class ResourceGroupsTaggingAPIBackend(BaseBackend):
     #     return failed_resources_map
 
 
-resourcegroupstaggingapi_backends = {}
-for region in Session().get_available_regions("resourcegroupstaggingapi"):
-    resourcegroupstaggingapi_backends[region] = ResourceGroupsTaggingAPIBackend(region)
-for region in Session().get_available_regions(
-    "resourcegroupstaggingapi", partition_name="aws-us-gov"
-):
-    resourcegroupstaggingapi_backends[region] = ResourceGroupsTaggingAPIBackend(region)
-for region in Session().get_available_regions(
-    "resourcegroupstaggingapi", partition_name="aws-cn"
-):
-    resourcegroupstaggingapi_backends[region] = ResourceGroupsTaggingAPIBackend(region)
+resourcegroupstaggingapi_backends = BackendDict(
+    ResourceGroupsTaggingAPIBackend, "resourcegroupstaggingapi"
+)

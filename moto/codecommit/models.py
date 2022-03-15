@@ -1,6 +1,5 @@
-from boto3 import Session
 from moto.core import BaseBackend, BaseModel
-from moto.core.utils import iso_8601_datetime_with_milliseconds
+from moto.core.utils import iso_8601_datetime_with_milliseconds, BackendDict
 from datetime import datetime
 from moto.core import ACCOUNT_ID
 from .exceptions import RepositoryDoesNotExistException, RepositoryNameExistsException
@@ -33,8 +32,14 @@ class CodeCommit(BaseModel):
 
 
 class CodeCommitBackend(BaseBackend):
-    def __init__(self):
+    def __init__(self, region=None):
         self.repositories = {}
+        self.region = region
+
+    def reset(self):
+        region = self.region
+        self.__dict__ = {}
+        self.__init__(region)
 
     @staticmethod
     def default_vpc_endpoint_service(service_region, zones):
@@ -43,13 +48,13 @@ class CodeCommitBackend(BaseBackend):
             service_region, zones, "codecommit"
         )
 
-    def create_repository(self, region, repository_name, repository_description):
+    def create_repository(self, repository_name, repository_description):
         repository = self.repositories.get(repository_name)
         if repository:
             raise RepositoryNameExistsException(repository_name)
 
         self.repositories[repository_name] = CodeCommit(
-            region, repository_description, repository_name
+            self.region, repository_description, repository_name
         )
 
         return self.repositories[repository_name].repository_metadata
@@ -71,6 +76,4 @@ class CodeCommitBackend(BaseBackend):
         return None
 
 
-codecommit_backends = {}
-for region in Session().get_available_regions("codecommit"):
-    codecommit_backends[region] = CodeCommitBackend()
+codecommit_backends = BackendDict(CodeCommitBackend, "codecommit")

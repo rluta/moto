@@ -141,11 +141,13 @@ class ActionAuthenticatorMixin(object):
 
     @staticmethod
     def set_initial_no_auth_action_count(initial_no_auth_action_count):
+        _test_server_mode_endpoint = settings.test_server_mode_endpoint()
+
         def decorator(function):
             def wrapper(*args, **kwargs):
                 if settings.TEST_SERVER_MODE:
                     response = requests.post(
-                        "http://localhost:5000/moto-api/reset-auth",
+                        f"{_test_server_mode_endpoint}/moto-api/reset-auth",
                         data=str(initial_no_auth_action_count).encode("utf-8"),
                     )
                     original_initial_no_auth_action_count = response.json()[
@@ -163,7 +165,7 @@ class ActionAuthenticatorMixin(object):
                 finally:
                     if settings.TEST_SERVER_MODE:
                         requests.post(
-                            "http://localhost:5000/moto-api/reset-auth",
+                            f"{_test_server_mode_endpoint}/moto-api/reset-auth",
                             data=str(original_initial_no_auth_action_count).encode(
                                 "utf-8"
                             ),
@@ -482,14 +484,8 @@ class BaseResponse(_TemplateEnvironmentMixin, ActionAuthenticatorMixin):
             tracked_prefixes or set()
         )  # prefixes which have already been processed
 
-        def is_tracked(name_param):
-            for prefix_loop in tracked_prefixes:
-                if name_param.startswith(prefix_loop):
-                    return True
-            return False
-
         for name, value in self.querystring.items():
-            if is_tracked(name) or not name.startswith(param_prefix):
+            if not name.startswith(param_prefix):
                 continue
 
             if len(name) > len(param_prefix) and not name[
@@ -649,6 +645,12 @@ class BaseResponse(_TemplateEnvironmentMixin, ActionAuthenticatorMixin):
                         # reset parent
                         obj = []
                         parent[keylist[i - 1]] = obj
+                elif isinstance(obj, dict):
+                    # initialize dict
+                    obj[key] = {}
+                    # step into
+                    parent = obj
+                    obj = obj[key]
                 elif key.isdigit():
                     index = int(key) - 1
                     if len(obj) <= index:
@@ -657,12 +659,6 @@ class BaseResponse(_TemplateEnvironmentMixin, ActionAuthenticatorMixin):
                     # step into
                     parent = obj
                     obj = obj[index]
-                else:
-                    # initialize dict
-                    obj[key] = {}
-                    # step into
-                    parent = obj
-                    obj = obj[key]
         if isinstance(obj, list):
             obj.append(value)
         else:
@@ -815,7 +811,9 @@ class BaseResponse(_TemplateEnvironmentMixin, ActionAuthenticatorMixin):
 
 
 class MotoAPIResponse(BaseResponse):
-    def reset_response(self, request, full_url, headers):
+    def reset_response(
+        self, request, full_url, headers
+    ):  # pylint: disable=unused-argument
         if request.method == "POST":
             from .models import moto_api_backend
 
@@ -823,7 +821,9 @@ class MotoAPIResponse(BaseResponse):
             return 200, {}, json.dumps({"status": "ok"})
         return 400, {}, json.dumps({"Error": "Need to POST to reset Moto"})
 
-    def reset_auth_response(self, request, full_url, headers):
+    def reset_auth_response(
+        self, request, full_url, headers
+    ):  # pylint: disable=unused-argument
         if request.method == "POST":
             previous_initial_no_auth_action_count = (
                 settings.INITIAL_NO_AUTH_ACTION_COUNT
@@ -844,7 +844,7 @@ class MotoAPIResponse(BaseResponse):
             )
         return 400, {}, json.dumps({"Error": "Need to POST to reset Moto Auth"})
 
-    def model_data(self, request, full_url, headers):
+    def model_data(self, request, full_url, headers):  # pylint: disable=unused-argument
         from moto.core.models import model_data
 
         results = {}
@@ -867,7 +867,7 @@ class MotoAPIResponse(BaseResponse):
                     results[service][name].append(inst_result)
         return 200, {"Content-Type": "application/javascript"}, json.dumps(results)
 
-    def dashboard(self, request, full_url, headers):
+    def dashboard(self, request, full_url, headers):  # pylint: disable=unused-argument
         from flask import render_template
 
         return render_template("dashboard.html")

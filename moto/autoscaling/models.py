@@ -10,7 +10,7 @@ from moto.ec2.exceptions import InvalidInstanceIdError
 
 from collections import OrderedDict
 from moto.core import ACCOUNT_ID, BaseBackend, BaseModel, CloudFormationModel
-from moto.core.utils import camelcase_to_underscores
+from moto.core.utils import camelcase_to_underscores, BackendDict
 from moto.ec2 import ec2_backends
 from moto.elb import elb_backends
 from moto.elbv2 import elbv2_backends
@@ -46,9 +46,7 @@ class InstanceState(object):
 
 
 class FakeLifeCycleHook(BaseModel):
-    def __init__(
-        self, name, as_name, transition, timeout, result,
-    ):
+    def __init__(self, name, as_name, transition, timeout, result):
         self.name = name
         self.as_name = as_name
         if transition:
@@ -523,11 +521,8 @@ class FakeAutoScalingGroup(CloudFormationModel):
         launch_config_name,
         launch_template,
         vpc_zone_identifier,
-        default_cooldown,
         health_check_period,
         health_check_type,
-        placement_group,
-        termination_policies,
         new_instances_protected_from_scale_in=None,
     ):
         self._set_azs_and_vpcs(availability_zones, vpc_zone_identifier, update=True)
@@ -633,22 +628,20 @@ class FakeAutoScalingGroup(CloudFormationModel):
 
 
 class AutoScalingBackend(BaseBackend):
-    def __init__(self, ec2_backend, elb_backend, elbv2_backend):
+    def __init__(self, region_name):
         self.autoscaling_groups = OrderedDict()
         self.launch_configurations = OrderedDict()
         self.policies = {}
         self.lifecycle_hooks = {}
-        self.ec2_backend = ec2_backend
-        self.elb_backend = elb_backend
-        self.elbv2_backend = elbv2_backend
-        self.region = self.elbv2_backend.region_name
+        self.ec2_backend = ec2_backends[region_name]
+        self.elb_backend = elb_backends[region_name]
+        self.elbv2_backend = elbv2_backends[region_name]
+        self.region = region_name
 
     def reset(self):
-        ec2_backend = self.ec2_backend
-        elb_backend = self.elb_backend
-        elbv2_backend = self.elbv2_backend
+        region = self.region
         self.__dict__ = {}
-        self.__init__(ec2_backend, elb_backend, elbv2_backend)
+        self.__init__(region)
 
     @staticmethod
     def default_vpc_endpoint_service(service_region, zones):
@@ -812,13 +805,13 @@ class AutoScalingBackend(BaseBackend):
         launch_config_name,
         launch_template,
         vpc_zone_identifier,
-        default_cooldown,
         health_check_period,
         health_check_type,
-        placement_group,
-        termination_policies,
         new_instances_protected_from_scale_in=None,
     ):
+        """
+        The parameter DefaultCooldown, PlacementGroup, TerminationPolicies are not yet implemented
+        """
         # TODO: Add MixedInstancesPolicy once implemented.
         # Verify only a single launch config-like parameter is provided.
         if launch_config_name and launch_template:
@@ -836,11 +829,8 @@ class AutoScalingBackend(BaseBackend):
             launch_config_name=launch_config_name,
             launch_template=launch_template,
             vpc_zone_identifier=vpc_zone_identifier,
-            default_cooldown=default_cooldown,
             health_check_period=health_check_period,
             health_check_type=health_check_type,
-            placement_group=placement_group,
-            termination_policies=termination_policies,
             new_instances_protected_from_scale_in=new_instances_protected_from_scale_in,
         )
         return group
@@ -892,9 +882,10 @@ class AutoScalingBackend(BaseBackend):
             self.update_attached_elbs(group.name)
             self.update_attached_target_groups(group.name)
 
-    def set_instance_health(
-        self, instance_id, health_status, should_respect_grace_period
-    ):
+    def set_instance_health(self, instance_id, health_status):
+        """
+        The ShouldRespectGracePeriod-parameter is not yet implemented
+        """
         instance = self.ec2_backend.get_instance(instance_id)
         instance_state = next(
             instance_state
@@ -954,7 +945,7 @@ class AutoScalingBackend(BaseBackend):
         self.set_desired_capacity(group_name, desired_capacity)
 
     def create_lifecycle_hook(self, name, as_name, transition, timeout, result):
-        lifecycle_hook = FakeLifeCycleHook(name, as_name, transition, timeout, result,)
+        lifecycle_hook = FakeLifeCycleHook(name, as_name, transition, timeout, result)
 
         self.lifecycle_hooks["%s_%s" % (as_name, name)] = lifecycle_hook
         return lifecycle_hook
@@ -1035,10 +1026,10 @@ class AutoScalingBackend(BaseBackend):
         for elb in elbs:
             elb_instace_ids = set(elb.instance_ids)
             self.elb_backend.register_instances(
-                elb.name, group_instance_ids - elb_instace_ids, from_autoscaling=True,
+                elb.name, group_instance_ids - elb_instace_ids, from_autoscaling=True
             )
             self.elb_backend.deregister_instances(
-                elb.name, elb_instace_ids - group_instance_ids, from_autoscaling=True,
+                elb.name, elb_instace_ids - group_instance_ids, from_autoscaling=True
             )
 
     def update_attached_target_groups(self, group_name):
@@ -1245,8 +1236,4 @@ class AutoScalingBackend(BaseBackend):
         return tags
 
 
-autoscaling_backends = {}
-for region, ec2_backend in ec2_backends.items():
-    autoscaling_backends[region] = AutoScalingBackend(
-        ec2_backend, elb_backends[region], elbv2_backends[region]
-    )
+autoscaling_backends = BackendDict(AutoScalingBackend, "ec2")

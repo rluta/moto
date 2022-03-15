@@ -1,5 +1,429 @@
 Moto Changelog
-===================
+==============
+
+3.1.0
+-----
+Docker Digest for 3.1.0: _sha256:1656754cf4de441d85b08f584d9dcb095880d3bf250f05da26a03ff219d586c8_
+
+    General:
+        * Users of `mock_dynamodb2` should start using `mock_dynamodb` instead. 
+          The `mock_dynamodb`-decorator has been repurposed to mock the latest version of DynamoDB, making the behaviour equivalent to `mock_dynamodb2`. 
+          The `mock_dynamodb2`-decorator is now considered deprecated, and will be removed in the next major version.
+
+        * Similarly, users of the `mock_rds2` should start using `mock_rds` instead.
+          The `mock_rds`-decorator has been repurposed to mock the latest version of RDS, making the behaviour equivalent to `mock_rds2`.
+          The `mock_rds2`-decorator has also been deprecated, and will be removed in the next major version.
+
+    Internal Changes:
+        * We've upgraded our linting process to use Black 22.1.0, and have enabled more pylint rules.
+          Please continue to run `make lint` prior to creating a PR, to ensure any changes are formatted correctly. 
+
+3.0.7
+-----
+Docker Digest for 3.0.7: _sha256:4db9433e741de635606fd2d997e555c26f51fc82e69d5043d0d9de90bbade229_
+
+    General:
+        * Compatible with the latest `responses`-release (0.19.0)
+
+    New Services:
+        * DataBrew:
+            * create_recipe()
+            * get_recipe()
+            * list_recipes()
+
+        * Pinpoint:
+            * create_app()
+            * delete_app()
+            * delete_event_stream()
+            * get_app()
+            * get_application_settings()
+            * get_apps()
+            * get_event_stream()
+            * list_tags_for_resource()
+            * put_event_stream()
+            * tag_resource()
+            * untag_resource()
+            * update_application_settings()
+
+3.0.6
+-----
+Docker Digest for 3.0.6: _sha256:de6b4ba576e143b3bbae250186b563c836f233afea5b3579629d3565824de74d_
+
+    General:
+        * Feature to start the MotoServer from within Python (in beta)
+
+    Miscellaneous:
+        * CloudFormation now supports creation of type AWS::EC2::VPCEndpoint
+        * ECS: run_task() - The task count now defaults to 1
+
+3.0.5
+-----
+Docker Digest for 3.0.5: _sha256:914ba446c1aad3917029fefe5d1c4a7a6a3866173391fb470151fe4a2163efcb_
+
+    New Services:
+        * Textract:
+            * get_document_text_detection()
+            * start_document_text_detection()
+
+    New Methods:
+        * APIGateway:
+            * delete_gateway_responses()
+            * get_gateway_response()
+            * get_gateway_responses()
+            * put_gateway_response()
+        * CloudTrail:
+            * add_tags()
+            * get_event_selectors()
+            * get_insight_selectors()
+            * list_tags()
+            * put_event_selectors()
+            * put_insight_selectors()
+            * remove_tags()
+            * update_trail()
+        * CognitoIDP:
+            * admin_set_user_mfa_preference()
+        * S3Control:
+            * create_access_point()
+            * delete_access_point()
+            * delete_access_point_policy()
+            * get_access_point()
+            * get_access_point_policy()
+            * get_access_point_policy_status()
+
+    Miscellaneous:
+        * APIGateway: put_integration() now supports the timeoutInMillis-parameter
+        * AWSLambda: Made the docker image repository selectable via the `MOTO_DOCKER_LAMBDA_IMAGE` environment variable.
+        * Batch: register_job_definition() now supports the parameters `platformCapabilities`, `propagateTags` and `retryStrategy`
+        * IAM: list_entities_for_policy() now returns the RoleId/GroupId/UserId-attributes
+        * S3Control is now available in ServerMode.
+
+3.0.4
+-----
+Docker Digest for 3.0.4: _sha256:320e1d2ab89729d5580dbe08d8c2153a28db4c28023c57747fb292ffceee84b6_
+
+    New Services:
+        * Redshift-Data:
+            * cancel_statement()
+            * describe_statement()
+            * execute_statement()
+            * get_statement_result()
+        * Servicediscovery/Cloudmap:
+            * create_http_namespace()
+            * create_private_dns_namespace()
+            * create_public_dns_namespace()
+            * create_service()
+            * delete_namespace()
+            * delete_service()
+            * get_namespace()
+            * get_operation()
+            * get_service()
+            * list_namespaces()
+            * list_operations()
+            * list_services()
+            * list_tags_for_resource()
+            * tag_resource()
+            * untag_resource()
+            * update_service()
+
+    New Methods:
+        * Athena:
+            * create_data_catalog()
+            * get_data_catalog()
+            * list_data_catalogs()
+        * SES:
+            * get_identity_mail_from_domain_attributes()
+            * set_identity_mail_from_domain()
+
+    Miscellaneous:
+        * SSM: Global infrastructure parameters supplied by AWS are now available in Moto
+
+3.0.3
+-----
+
+    * New Services:
+        * APIGatewayV2
+            * create_api()
+            * create_authorizer()
+            * create_integration()
+            * create_integration_response()
+            * create_model()
+            * create_route()
+            * create_route_response()
+            * create_vpc_link()
+            * delete_api()
+            * delete_authorizer()
+            * delete_cors_configuration()
+            * delete_integration()
+            * delete_integration_response()
+            * delete_model()
+            * delete_route()
+            * delete_route_request_parameter()
+            * delete_route_response()
+            * delete_vpc_link()
+            * get_api()
+            * get_apis()
+            * get_authorizer()
+            * get_integration()
+            * get_integration_response()
+            * get_integration_responses()
+            * get_integrations()
+            * get_model()
+            * get_route()
+            * get_route_response()
+            * get_routes()
+            * get_tags()
+            * get_vpc_link()
+            * get_vpc_links()
+            * reimport_api()
+            * tag_resource()
+            * untag_resource()
+            * update_api()
+            * update_authorizer()
+            * update_integration()
+            * update_integration_response()
+            * update_model()
+            * update_route()
+            * update_vpc_link()
+
+    * New Methods:
+        * APIGateway:
+            * create_vpc_link()
+            * delete_vpc_link()
+            * get_vpc_link()
+            * get_vpc_links()
+        EC2:
+            * create_vpc_endpoint_service_configuration()
+            * delete_vpc_endpoint_service_configurations()
+            * describe_vpc_endpoint_service_configurations()
+            * describe_vpc_endpoint_service_permissions()
+            * modify_vpc_endpoint_service_configuration()
+            * modify_vpc_endpoint_service_permissions()
+        * Route53:
+            * create_reusable_delegation_set()
+            * delete_reusable_delegation_set()
+            * get_hosted_zone_count()
+            * get_reusable_delegation_set()
+            * list_reusable_delegation_sets()
+
+    * Miscellaneous:
+        * CognitoIDP:
+            * initiate_auth()/admin_initiate_auth(): improved behaviour of the AuthFlow-parameter
+        * EC2:
+            * describe_instance_types() now returns the GpuInfo-attribute
+        * Redshift:
+            * describe_cluster_snapshots() now supports the SnapshotType-parameter
+
+3.0.2
+-----
+
+    * New Methods:
+        * Kinesis:
+            * deregister_stream_consumer()
+            * describe_stream_consumer()
+            * disable_enhanced_monitoring()
+            * enable_enhanced_monitoring()
+            * list_stream_consumers()
+            * register_stream_consumer()
+            * start_stream_encryption()
+            * stop_stream_encryption()
+            * update_shard_count()
+        * RDS:
+            * cancel_export_task()
+            * copy_db_cluster_snapshot()
+            * copy_db_snapshot()
+            * create_db_cluster_snapshot()
+            * create_event_subscription()
+            * delete_db_cluster_snapshot()
+            * delete_event_subscription()
+            * describe_db_cluster_snapshots()
+            * describe_event_subscriptions()
+            * describe_export_tasks()
+            * start_export_task()
+        * Route53
+            * list_hosted_zones_by_vpc()
+
+    * Miscellaneous:
+        * Improved configuration options for Docker-instances started by AWSLambda and Batch
+
+3.0.1
+-----
+
+    * New Services:
+        * MQ:
+            * create_broker()
+            * create_configuration()
+            * create_tags()
+            * create_user()
+            * delete_broker()
+            * delete_tags()
+            * delete_user()
+            * describe_broker()
+            * describe_configuration()
+            * describe_configuration_revision()
+            * describe_user()
+            * list_brokers()
+            * list_configurations()
+            * list_tags()
+            * list_users()
+            * reboot_broker()
+            * update_broker()
+            * update_configuration()
+            * update_user()
+
+    * New Methods:
+        * EC2:
+            * create_snapshots()
+        * Logs:
+            * create_export_task()
+        * Organizations:
+            * remove_account_from_organization()
+
+    * Miscellaneous:
+        * DynamoDB: transact_write_items() now throws a MultipleTransactionsException when appropriate
+        * DynamoDB: Now throws the appropriate InvalidConditionExpression when a ConditionExpression contains reserved keywords
+        * Organizations: delete_organization() now validates whether all accounts are deleted
+        * SecretsManager: The attributes CreatedDate and LastChangedDate are now returned for secrets
+        * SNS: Simplistic email validation is now in place before sending emails
+
+3.0.0
+-----
+    This is a major release, and as such contains some breaking changes.
+
+    * Removed:
+        - All deprecated decorators have been removed
+
+    * Changes:
+        - The behaviour of the class-decorator has been reworked - the state is now reset before every test-method.
+        - ECS ARN's are now using the long format.
+
+    * Rebranded:
+        - The new mock_s3control-decorator has been introduced. The existing S3control methods (get/put/delete_public_access_block) are no longer available via mock_s3, only via mock_s3control.
+
+    * General:
+        - Python 3.5 support has been removed
+        - Python 3.10 is now supported
+
+
+2.3.2
+-----
+    General:
+        * Compatible with the latest `responses`-release (0.17.0)
+
+    New Services:
+        * Appsync:
+            * create_api_key()
+            * create_graphql_api()
+            * delete_api_key()
+            * delete_graphql_api()
+            * get_graphql_api()
+            * get_schema_creation_status()
+            * get_type()
+            * list_api_keys()
+            * list_graphql_apis()
+            * list_tags_for_resource()
+            * start_schema_creation()
+            * tag_resource()
+            * untag_resource()
+            * update_api_key()
+            * update_graphql_api()
+
+    Miscellaneous:
+        * AWSLambda:invoke() now throws an error when trying to return an oversized payload (>6MB)
+        * EC2:describe_instances() now supports filtering by `dns-name`
+        * EC2:describe_managed_prefix_lists() now supports filtering by tags
+        * SQS:delete_message_batch() now correctly deals with invalid receipt handles
+
+2.3.1
+-----
+    New Services:
+        * DAX:
+            * create_cluster()
+            * decrease_replication_factor()
+            * delete_cluster()
+            * describe_clusters()
+            * increase_replication_factor()
+            * list_tags()
+        * SSO-Admin:
+            * create_account_assignment()
+            * delete_account_assignment()
+            * list_account_assignments()
+
+    New Methods:
+        * APIGateway:
+            * update_base_path_mapping()
+        * SNS:
+            * publish_batch()
+
+    Miscellaneous:
+        * ECS: run_task() now supports the launchType-parameter
+        * SNS: publish() now supports FIFO-topics
+        * SWF: respond_decision_task_completed() now supports RecordMarker/StartTimer/CancelTimer/CancelWorkflowExecution decisions
+
+2.3.0
+-----
+    General:
+        * It is now possible to use a mocked region. This will throw an error by default, but can be enabled using the `MOTO_ALLOW_NONEXISTENT_REGION`-environment variable.
+        * Performance improvements - only the backend for the requested region is now loaded into memory, instead of (naively) loading a backend for every region.
+
+2.2.20
+-----
+    New Services:
+        * ElasticsearchService:
+            * create_elasticsearch_domain()
+            * delete_elasticsearch_domain()
+            * describe_elasticsearch_domain()
+            * list_domain_names()
+
+    New Methods:
+        * EC2:
+            * disable_ebs_encryption_by_default()
+            * enable_ebs_encryption_by_default()
+            * get_ebs_encryption_by_default()
+        * Redshift:
+            * pause_cluster()
+            * resume_cluster()
+
+    Miscellanous:
+        * ELBv2: create_listener now supports the DefaultActions.ForwardConfig parameter
+        * Redshift: restore_from_cluster_snapshot() now supports the NodeType and NumberOfNodes-parameters
+        * Sagemaker: list_experiments() now supports pagination
+        * Sagemaker: list_trials() now supports pagination
+        * Sagemaker: list_trial_components() now supports pagination
+
+
+2.2.19
+-----
+    General:
+        * Support for ap-southeast-3
+
+
+2.2.18
+------
+    New Services:
+        * ElastiCache:
+            * create_user()
+            * delete_user()
+            * describe_users()
+        * GuardDuty:
+            * create_detector()
+            * list_detectors()
+
+    New Methods:
+        * IAM:
+            * list_open_id_connect_provider_tags()
+            * tag_open_id_connect_provider()
+            * untag_open_id_connect_provider()
+            * update_open_id_connect_provider_thumbprint()
+        * IOT:
+            * create_domain_configuration()
+            * delete_domain_configuration()
+            * describe_domain_configuration()
+            * list_domain_configurations()
+            * update_domain_configuration()
+
+    Miscellaneous:
+        * ResourceGroupTaggingAPI now supports Lambda Functions
+        * SecretsManager:list_secrets() now supports negative filters
 
 2.2.17
 ------

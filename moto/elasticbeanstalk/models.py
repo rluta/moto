@@ -1,16 +1,13 @@
 import weakref
 
-from boto3 import Session
-
 from moto.core import BaseBackend, BaseModel, ACCOUNT_ID
+from moto.core.utils import BackendDict
 from .exceptions import InvalidParameterValueError, ResourceNotFoundException
 from .utils import make_arn
 
 
 class FakeEnvironment(BaseModel):
-    def __init__(
-        self, application, environment_name, solution_stack_name, tags,
-    ):
+    def __init__(self, application, environment_name, solution_stack_name, tags):
         self.application = weakref.proxy(
             application
         )  # weakref to break circular dependencies
@@ -42,9 +39,7 @@ class FakeApplication(BaseModel):
         self.application_name = application_name
         self.environments = dict()
 
-    def create_environment(
-        self, environment_name, solution_stack_name, tags,
-    ):
+    def create_environment(self, environment_name, solution_stack_name, tags):
         if environment_name in self.environments:
             raise InvalidParameterValueError
 
@@ -93,15 +88,13 @@ class EBBackend(BaseBackend):
             raise InvalidParameterValueError(
                 "Application {} already exists.".format(application_name)
             )
-        new_app = FakeApplication(backend=self, application_name=application_name,)
+        new_app = FakeApplication(backend=self, application_name=application_name)
         self.applications[application_name] = new_app
         return new_app
 
     def create_environment(self, app, environment_name, stack_name, tags):
         return app.create_environment(
-            environment_name=environment_name,
-            solution_stack_name=stack_name,
-            tags=tags,
+            environment_name=environment_name, solution_stack_name=stack_name, tags=tags
         )
 
     def describe_environments(self):
@@ -146,14 +139,4 @@ class EBBackend(BaseBackend):
         raise KeyError()
 
 
-eb_backends = {}
-for region in Session().get_available_regions("elasticbeanstalk"):
-    eb_backends[region] = EBBackend(region)
-for region in Session().get_available_regions(
-    "elasticbeanstalk", partition_name="aws-us-gov"
-):
-    eb_backends[region] = EBBackend(region)
-for region in Session().get_available_regions(
-    "elasticbeanstalk", partition_name="aws-cn"
-):
-    eb_backends[region] = EBBackend(region)
+eb_backends = BackendDict(EBBackend, "elasticbeanstalk")

@@ -76,7 +76,7 @@ class SQSResponse(BaseResponse):
     @amz_crc32  # crc last as request_id can edit XML
     @amzn_request_id
     def call_action(self):
-        status_code, headers, body = super(SQSResponse, self).call_action()
+        status_code, headers, body = super().call_action()
         if status_code == 404:
             queue_name = self.querystring.get("QueueName", [""])[0]
             template = self.response_template(ERROR_INEXISTENT_QUEUE)
@@ -351,14 +351,26 @@ class SQSResponse(BaseResponse):
                 raise BatchEntryIdsNotDistinct(receipt_and_id["msg_user_id"])
             receipt_seen.add(receipt)
 
+        success = []
+        errors = []
         for receipt_and_id in receipts:
-            self.sqs_backend.delete_message(
-                queue_name, receipt_and_id["receipt_handle"]
-            )
+            try:
+                self.sqs_backend.delete_message(
+                    queue_name, receipt_and_id["receipt_handle"]
+                )
+                success.append(receipt_and_id["msg_user_id"])
+            except ReceiptHandleIsInvalid:
+                errors.append(
+                    {
+                        "Id": receipt_and_id["msg_user_id"],
+                        "SenderFault": "true",
+                        "Code": "ReceiptHandleIsInvalid",
+                        "Message": f'The input receipt handle "{receipt_and_id["receipt_handle"]}" is not a valid receipt handle.',
+                    }
+                )
 
-        message_ids = [r["msg_user_id"] for r in receipts]
         template = self.response_template(DELETE_MESSAGE_BATCH_RESPONSE)
-        return template.render(message_ids=message_ids)
+        return template.render(success=success, errors=errors)
 
     def purge_queue(self):
         queue_name = self._get_queue_name()
@@ -669,10 +681,18 @@ DELETE_MESSAGE_RESPONSE = """<DeleteMessageResponse>
 
 DELETE_MESSAGE_BATCH_RESPONSE = """<DeleteMessageBatchResponse>
     <DeleteMessageBatchResult>
-        {% for message_id in message_ids %}
+        {% for message_id in success %}
             <DeleteMessageBatchResultEntry>
                 <Id>{{ message_id }}</Id>
             </DeleteMessageBatchResultEntry>
+        {% endfor %}
+        {% for error_dict in errors %}
+        <BatchResultErrorEntry>
+            <Id>{{ error_dict['Id'] }}</Id>
+            <Code>{{ error_dict['Code'] }}</Code>
+            <Message>{{ error_dict['Message'] }}</Message>
+            <SenderFault>{{ error_dict['SenderFault'] }}</SenderFault>
+        </BatchResultErrorEntry>
         {% endfor %}
     </DeleteMessageBatchResult>
     <ResponseMetadata>
@@ -772,8 +792,8 @@ ERROR_TOO_LONG_RESPONSE = """<ErrorResponse xmlns="http://queue.amazonaws.com/do
     <RequestId>6fde8d1e-52cd-4581-8cd9-c512f4c64223</RequestId>
 </ErrorResponse>"""
 
-ERROR_MAX_VISIBILITY_TIMEOUT_RESPONSE = "Invalid request, maximum visibility timeout is {0}".format(
-    MAXIMUM_VISIBILTY_TIMEOUT
+ERROR_MAX_VISIBILITY_TIMEOUT_RESPONSE = (
+    f"Invalid request, maximum visibility timeout is {MAXIMUM_VISIBILTY_TIMEOUT}"
 )
 
 ERROR_INEXISTENT_QUEUE = """<ErrorResponse xmlns="http://queue.amazonaws.com/doc/2012-11-05/">

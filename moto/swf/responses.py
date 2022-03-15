@@ -156,15 +156,10 @@ class SWFResponse(BaseResponse):
 
         workflow_executions = self.swf_backend.list_closed_workflow_executions(
             domain_name=domain,
-            start_time_filter=start_time_filter,
-            close_time_filter=close_time_filter,
-            execution_filter=execution_filter,
             tag_filter=tag_filter,
-            type_filter=type_filter,
+            close_status_filter=close_status_filter,
             maximum_page_size=maximum_page_size,
             reverse_order=reverse_order,
-            workflow_id=workflow_id,
-            close_status_filter=close_status_filter,
         )
 
         return json.dumps(
@@ -200,13 +195,9 @@ class SWFResponse(BaseResponse):
 
         workflow_executions = self.swf_backend.list_open_workflow_executions(
             domain_name=domain,
-            start_time_filter=start_time_filter,
-            execution_filter=execution_filter,
-            tag_filter=tag_filter,
-            type_filter=type_filter,
             maximum_page_size=maximum_page_size,
+            tag_filter=tag_filter,
             reverse_order=reverse_order,
-            workflow_id=workflow_id,
         )
 
         return json.dumps(
@@ -396,7 +387,7 @@ class SWFResponse(BaseResponse):
             task_list=task_list,
             child_policy=child_policy,
             execution_start_to_close_timeout=execution_start_to_close_timeout,
-            input=input_,
+            workflow_input=input_,
             tag_list=tag_list,
             task_start_to_close_timeout=task_start_to_close_timeout,
         )

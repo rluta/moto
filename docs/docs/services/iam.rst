@@ -89,6 +89,10 @@ iam
 - [ ] get_context_keys_for_principal_policy
 - [X] get_credential_report
 - [X] get_group
+  
+        Pagination is not yet implemented
+        
+
 - [X] get_group_policy
 - [X] get_instance_profile
 - [X] get_login_profile
@@ -106,13 +110,21 @@ iam
 - [X] get_ssh_public_key
 - [X] get_user
 - [X] get_user_policy
-- [ ] list_access_keys
+- [X] list_access_keys
+  
+        Pagination is not yet implemented
+        
+
 - [X] list_account_aliases
 - [X] list_attached_group_policies
 - [X] list_attached_role_policies
 - [X] list_attached_user_policies
 - [ ] list_entities_for_policy
 - [X] list_group_policies
+  
+        Pagination is not yet implemented
+        
+
 - [X] list_groups
 - [ ] list_groups_for_user
 - [ ] list_instance_profile_tags
@@ -120,7 +132,7 @@ iam
 - [ ] list_instance_profiles_for_role
 - [ ] list_mfa_device_tags
 - [X] list_mfa_devices
-- [ ] list_open_id_connect_provider_tags
+- [X] list_open_id_connect_provider_tags
 - [X] list_open_id_connect_providers
 - [X] list_policies
 - [ ] list_policies_granting_service_access
@@ -132,7 +144,11 @@ iam
 - [ ] list_saml_provider_tags
 - [X] list_saml_providers
 - [ ] list_server_certificate_tags
-- [ ] list_server_certificates
+- [X] list_server_certificates
+  
+        Pagination is not yet implemented
+        
+
 - [ ] list_service_specific_credentials
 - [X] list_signing_certificates
 - [ ] list_ssh_public_keys
@@ -156,7 +172,7 @@ iam
 - [ ] simulate_principal_policy
 - [ ] tag_instance_profile
 - [ ] tag_mfa_device
-- [ ] tag_open_id_connect_provider
+- [X] tag_open_id_connect_provider
 - [X] tag_policy
 - [X] tag_role
 - [ ] tag_saml_provider
@@ -164,7 +180,7 @@ iam
 - [X] tag_user
 - [ ] untag_instance_profile
 - [ ] untag_mfa_device
-- [ ] untag_open_id_connect_provider
+- [X] untag_open_id_connect_provider
 - [X] untag_policy
 - [X] untag_role
 - [ ] untag_saml_provider
@@ -175,7 +191,7 @@ iam
 - [ ] update_assume_role_policy
 - [X] update_group
 - [X] update_login_profile
-- [ ] update_open_id_connect_provider_thumbprint
+- [X] update_open_id_connect_provider_thumbprint
 - [X] update_role
 - [X] update_role_description
 - [X] update_saml_provider

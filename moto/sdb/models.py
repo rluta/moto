@@ -1,8 +1,8 @@
 """SimpleDBBackend class with methods for supported APIs."""
 import re
-from boto3 import Session
 from collections import defaultdict
 from moto.core import BaseBackend, BaseModel
+from moto.core.utils import BackendDict
 from threading import Lock
 
 from .exceptions import InvalidDomainName, UnknownDomainName
@@ -59,11 +59,11 @@ class SimpleDBBackend(BaseBackend):
         self._validate_domain_name(domain_name)
         self.domains[domain_name] = FakeDomain(name=domain_name)
 
-    def list_domains(self, max_number_of_domains, next_token):
+    def list_domains(self):
         """
         The `max_number_of_domains` and `next_token` parameter have not been implemented yet - we simply return all domains.
         """
-        return self.domains.keys(), None
+        return self.domains.keys()
 
     def delete_domain(self, domain_name):
         self._validate_domain_name(domain_name)
@@ -81,7 +81,7 @@ class SimpleDBBackend(BaseBackend):
             raise UnknownDomainName()
         return self.domains[domain_name]
 
-    def get_attributes(self, domain_name, item_name, attribute_names, consistent_read):
+    def get_attributes(self, domain_name, item_name, attribute_names):
         """
         Behaviour for the consistent_read-attribute is not yet implemented
         """
@@ -89,7 +89,7 @@ class SimpleDBBackend(BaseBackend):
         domain = self._get_domain(domain_name)
         return domain.get(item_name, attribute_names)
 
-    def put_attributes(self, domain_name, item_name, attributes, expected):
+    def put_attributes(self, domain_name, item_name, attributes):
         """
         Behaviour for the expected-attribute is not yet implemented.
         """
@@ -98,12 +98,4 @@ class SimpleDBBackend(BaseBackend):
         domain.put(item_name, attributes)
 
 
-sdb_backends = {}
-for available_region in Session().get_available_regions("sdb"):
-    sdb_backends[available_region] = SimpleDBBackend(available_region)
-for available_region in Session().get_available_regions(
-    "sdb", partition_name="aws-us-gov"
-):
-    sdb_backends[available_region] = SimpleDBBackend(available_region)
-for available_region in Session().get_available_regions("sdb", partition_name="aws-cn"):
-    sdb_backends[available_region] = SimpleDBBackend(available_region)
+sdb_backends = BackendDict(SimpleDBBackend, "sdb")

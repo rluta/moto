@@ -1,8 +1,8 @@
 import json
 
-from boto3 import Session
 from datetime import datetime
 from moto.core import ACCOUNT_ID, BaseBackend, BaseModel
+from moto.core.utils import BackendDict
 
 from .exceptions import (
     InvalidResourceStateFault,
@@ -14,7 +14,7 @@ from .utils import filter_tasks
 
 class DatabaseMigrationServiceBackend(BaseBackend):
     def __init__(self, region_name=None):
-        super(DatabaseMigrationServiceBackend, self).__init__()
+        super().__init__()
         self.region_name = region_name
         self.replication_tasks = {}
 
@@ -39,13 +39,11 @@ class DatabaseMigrationServiceBackend(BaseBackend):
         migration_type,
         table_mappings,
         replication_task_settings,
-        cdc_start_time,
-        cdc_start_position,
-        cdc_stop_position,
-        tags,
-        task_data,
-        resource_identifier,
     ):
+        """
+        The following parameters are not yet implemented:
+        CDCStartTime, CDCStartPosition, CDCStopPosition, Tags, TaskData, ResourceIdentifier
+        """
         replication_task = FakeReplicationTask(
             replication_task_identifier=replication_task_identifier,
             source_endpoint_arn=source_endpoint_arn,
@@ -66,14 +64,11 @@ class DatabaseMigrationServiceBackend(BaseBackend):
 
         return replication_task
 
-    def start_replication_task(
-        self,
-        replication_task_arn,
-        start_replication_task_type,
-        cdc_start_time,
-        cdc_start_position,
-        cdc_stop_position,
-    ):
+    def start_replication_task(self, replication_task_arn):
+        """
+        The following parameters have not yet been implemented:
+        StartReplicationTaskType, CDCStartTime, CDCStartPosition, CDCStopPosition
+        """
         if not self.replication_tasks.get(replication_task_arn):
             raise ResourceNotFoundFault("Replication task could not be found.")
 
@@ -95,13 +90,16 @@ class DatabaseMigrationServiceBackend(BaseBackend):
 
         return task
 
-    def describe_replication_tasks(self, filters, max_records, without_settings):
+    def describe_replication_tasks(self, filters, max_records):
+        """
+        The parameter WithoutSettings has not yet been implemented
+        """
         replication_tasks = filter_tasks(self.replication_tasks.values(), filters)
 
         if max_records and max_records > 0:
             replication_tasks = replication_tasks[:max_records]
 
-        return None, replication_tasks
+        return replication_tasks
 
 
 class FakeReplicationTask(BaseModel):
@@ -195,10 +193,4 @@ class FakeReplicationTask(BaseModel):
         return self
 
 
-dms_backends = {}
-for region in Session().get_available_regions("dms"):
-    dms_backends[region] = DatabaseMigrationServiceBackend()
-for region in Session().get_available_regions("dms", partition_name="aws-us-gov"):
-    dms_backends[region] = DatabaseMigrationServiceBackend()
-for region in Session().get_available_regions("dms", partition_name="aws-cn"):
-    dms_backends[region] = DatabaseMigrationServiceBackend()
+dms_backends = BackendDict(DatabaseMigrationServiceBackend, "dms")

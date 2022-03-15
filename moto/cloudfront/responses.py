@@ -36,7 +36,7 @@ class CloudFrontResponse(BaseResponse):
         params = self._get_xml_body()
         distribution_config = params.get("DistributionConfig")
         distribution, location, e_tag = cloudfront_backend.create_distribution(
-            distribution_config=distribution_config,
+            distribution_config=distribution_config
         )
         template = self.response_template(CREATE_DISTRIBUTION_TEMPLATE)
         response = template.render(distribution=distribution, xmlns=XMLNS)
@@ -381,7 +381,7 @@ DIST_CONFIG_TEMPLATE = """
         </Items>
         {% endif %}
       </CustomErrorResponses>
-      <Comment>{{ CommentType }}</Comment>
+      <Comment>{{ distribution.distribution_config.comment }}</Comment>
       <Logging>
         <Enabled>{{ distribution.distribution_config.logging.enabled }}</Enabled>
         <IncludeCookies>{{ distribution.distribution_config.logging.include_cookies }}</IncludeCookies>

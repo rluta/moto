@@ -2,12 +2,13 @@ import re
 from dataclasses import dataclass
 from typing import Dict
 
-from boto3 import Session
 from collections import defaultdict
 
 from moto.core import ACCOUNT_ID, BaseBackend, BaseModel
 from moto.core.exceptions import RESTError
+from moto.core.utils import BackendDict
 from moto.ec2 import ec2_backends
+from moto.utilities.utils import load_resource
 
 import datetime
 import time
@@ -17,7 +18,7 @@ import yaml
 import hashlib
 import random
 
-from .utils import parameter_arn
+from .utils import parameter_arn, convert_to_params
 from .exceptions import (
     ValidationException,
     InvalidFilterValue,
@@ -42,6 +43,62 @@ from .exceptions import (
 )
 
 
+class ParameterDict(defaultdict):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.parameters_loaded = False
+
+    def _check_loading_status(self, key):
+        if not self.parameters_loaded and key and str(key).startswith("/aws"):
+            self._load_global_parameters()
+
+    def _load_global_parameters(self):
+        regions = load_resource(__name__, "resources/regions.json")
+        services = load_resource(__name__, "resources/services.json")
+        params = []
+        params.extend(convert_to_params(regions))
+        params.extend(convert_to_params(services))
+
+        for param in params:
+            last_modified_date = time.time()
+            name = param["Name"]
+            value = param["Value"]
+            # Following were lost in translation/conversion - using sensible defaults
+            parameter_type = "String"
+            version = 1
+            super().__getitem__(name).append(
+                Parameter(
+                    name=name,
+                    value=value,
+                    parameter_type=parameter_type,
+                    description=None,
+                    allowed_pattern=None,
+                    keyid=None,
+                    last_modified_date=last_modified_date,
+                    version=version,
+                    data_type="text",
+                )
+            )
+        self.parameters_loaded = True
+
+    def __getitem__(self, item):
+        self._check_loading_status(item)
+        return super().__getitem__(item)
+
+    def __contains__(self, k):
+        self._check_loading_status(k)
+        return super().__contains__(k)
+
+    def get_keys_beginning_with(self, path, recursive):
+        self._check_loading_status(path)
+        for param_name in self:
+            if path != "/" and not param_name.startswith(path):
+                continue
+            if "/" in param_name[len(path) + 1 :] and not recursive:
+                continue
+            yield param_name
+
+
 PARAMETER_VERSION_LIMIT = 100
 PARAMETER_HISTORY_MAX_RESULTS = 50
 
@@ -51,7 +108,7 @@ class Parameter(BaseModel):
         self,
         name,
         value,
-        type,
+        parameter_type,
         description,
         allowed_pattern,
         keyid,
@@ -61,7 +118,7 @@ class Parameter(BaseModel):
         tags=None,
     ):
         self.name = name
-        self.type = type
+        self.type = parameter_type
         self.description = description
         self.allowed_pattern = allowed_pattern
         self.keyid = keyid
@@ -612,50 +669,50 @@ def _validate_document_info(content, name, document_type, document_format, stric
         raise ValidationException("Invalid document type " + str(document_type))
 
 
-def _document_filter_equal_comparator(keyed_value, filter):
-    for v in filter["Values"]:
+def _document_filter_equal_comparator(keyed_value, _filter):
+    for v in _filter["Values"]:
         if keyed_value == v:
             return True
     return False
 
 
-def _document_filter_list_includes_comparator(keyed_value_list, filter):
-    for v in filter["Values"]:
+def _document_filter_list_includes_comparator(keyed_value_list, _filter):
+    for v in _filter["Values"]:
         if v in keyed_value_list:
             return True
     return False
 
 
 def _document_filter_match(filters, ssm_doc):
-    for filter in filters:
-        if filter["Key"] == "Name" and not _document_filter_equal_comparator(
-            ssm_doc.name, filter
+    for _filter in filters:
+        if _filter["Key"] == "Name" and not _document_filter_equal_comparator(
+            ssm_doc.name, _filter
         ):
             return False
 
-        elif filter["Key"] == "Owner":
-            if len(filter["Values"]) != 1:
+        elif _filter["Key"] == "Owner":
+            if len(_filter["Values"]) != 1:
                 raise ValidationException("Owner filter can only have one value.")
-            if filter["Values"][0] == "Self":
+            if _filter["Values"][0] == "Self":
                 # Update to running account ID
-                filter["Values"][0] = ACCOUNT_ID
-            if not _document_filter_equal_comparator(ssm_doc.owner, filter):
+                _filter["Values"][0] = ACCOUNT_ID
+            if not _document_filter_equal_comparator(ssm_doc.owner, _filter):
                 return False
 
-        elif filter[
+        elif _filter[
             "Key"
         ] == "PlatformTypes" and not _document_filter_list_includes_comparator(
-            ssm_doc.platform_types, filter
+            ssm_doc.platform_types, _filter
         ):
             return False
 
-        elif filter["Key"] == "DocumentType" and not _document_filter_equal_comparator(
-            ssm_doc.document_type, filter
+        elif _filter["Key"] == "DocumentType" and not _document_filter_equal_comparator(
+            ssm_doc.document_type, _filter
         ):
             return False
 
-        elif filter["Key"] == "TargetType" and not _document_filter_equal_comparator(
-            ssm_doc.target_type, filter
+        elif _filter["Key"] == "TargetType" and not _document_filter_equal_comparator(
+            ssm_doc.target_type, _filter
         ):
             return False
 
@@ -718,11 +775,20 @@ class FakeMaintenanceWindow:
 
 
 class SimpleSystemManagerBackend(BaseBackend):
-    def __init__(self, region_name=None):
-        super(SimpleSystemManagerBackend, self).__init__()
+    """
+    Moto supports the following default parameters out of the box:
+
+     - /aws/service/global-infrastructure/regions
+     - /aws/service/global-infrastructure/services
+
+    Note that these are hardcoded, so they may be out of date for new services/regions.
+    """
+
+    def __init__(self, region):
+        super().__init__()
         # each value is a list of all of the versions for a parameter
         # to get the current value, grab the last item of the list
-        self._parameters = defaultdict(list)
+        self._parameters = ParameterDict(list)
 
         self._resource_tags = defaultdict(lambda: defaultdict(dict))
         self._commands = []
@@ -731,7 +797,7 @@ class SimpleSystemManagerBackend(BaseBackend):
 
         self.windows: Dict[str, FakeMaintenanceWindow] = dict()
 
-        self._region = region_name
+        self._region = region
 
     def reset(self):
         region_name = self._region
@@ -965,7 +1031,7 @@ class SimpleSystemManagerBackend(BaseBackend):
             document_version=new_version,
         )
 
-        for doc_version, document in documents.versions.items():
+        for document in documents.versions.values():
             if document.content == new_ssm_document.content:
                 if not target_type or target_type == document.target_type:
                     raise DuplicateDocumentContent(
@@ -994,7 +1060,7 @@ class SimpleSystemManagerBackend(BaseBackend):
         results = []
         dummy_token_tracker = 0
         # Sort to maintain next token adjacency
-        for document_name, documents in sorted(self._documents.items()):
+        for _, documents in sorted(self._documents.items()):
             if len(results) == max_results:
                 # There's still more to go so we need a next token
                 return results, str(next_token + len(results))
@@ -1015,11 +1081,10 @@ class SimpleSystemManagerBackend(BaseBackend):
         # If we've fallen out of the loop, theres no more documents. No next token.
         return results, ""
 
-    def describe_document_permission(
-        self, name, max_results=None, permission_type=None, next_token=None
-    ):
-        # Parameters max_results, permission_type, and next_token not used because
-        # this current implementation doesn't support pagination.
+    def describe_document_permission(self, name):
+        """
+        Parameters max_results, permission_type, and next_token not yet implemented
+        """
         document = self._get_documents(name)
         return document.describe_permissions()
 
@@ -1104,28 +1169,28 @@ class SimpleSystemManagerBackend(BaseBackend):
 
         result = []
         for param_name in self._parameters:
-            ssm_parameter = self.get_parameter(param_name, False)
+            ssm_parameter = self.get_parameter(param_name)
             if not self._match_filters(ssm_parameter, parameter_filters):
                 continue
 
             if filters:
-                for filter in filters:
-                    if filter["Key"] == "Name":
+                for _filter in filters:
+                    if _filter["Key"] == "Name":
                         k = ssm_parameter.name
-                        for v in filter["Values"]:
+                        for v in _filter["Values"]:
                             if k.startswith(v):
                                 result.append(ssm_parameter)
                                 break
-                    elif filter["Key"] == "Type":
+                    elif _filter["Key"] == "Type":
                         k = ssm_parameter.type
-                        for v in filter["Values"]:
+                        for v in _filter["Values"]:
                             if k == v:
                                 result.append(ssm_parameter)
                                 break
-                    elif filter["Key"] == "KeyId":
+                    elif _filter["Key"] == "KeyId":
                         k = ssm_parameter.keyid
                         if k:
-                            for v in filter["Values"]:
+                            for v in _filter["Values"]:
                                 if k == v:
                                     result.append(ssm_parameter)
                                     break
@@ -1319,7 +1384,7 @@ class SimpleSystemManagerBackend(BaseBackend):
             result.append(self._parameters[k])
         return result
 
-    def get_parameters(self, names, with_decryption):
+    def get_parameters(self, names):
         result = {}
 
         if len(names) > 10:
@@ -1334,7 +1399,7 @@ class SimpleSystemManagerBackend(BaseBackend):
         for name in set(names):
             if name.split(":")[0] in self._parameters:
                 try:
-                    param = self.get_parameter(name, with_decryption)
+                    param = self.get_parameter(name)
 
                     if param is not None:
                         result[name] = param
@@ -1345,7 +1410,6 @@ class SimpleSystemManagerBackend(BaseBackend):
     def get_parameters_by_path(
         self,
         path,
-        with_decryption,
         recursive,
         filters=None,
         next_token=None,
@@ -1359,16 +1423,11 @@ class SimpleSystemManagerBackend(BaseBackend):
         # path could be with or without a trailing /. we handle this
         # difference here.
         path = path.rstrip("/") + "/"
-        for param_name in self._parameters:
-            if path != "/" and not param_name.startswith(path):
+        for param_name in self._parameters.get_keys_beginning_with(path, recursive):
+            parameter = self.get_parameter(param_name)
+            if not self._match_filters(parameter, filters):
                 continue
-            if "/" in param_name[len(path) + 1 :] and not recursive:
-                continue
-            if not self._match_filters(
-                self.get_parameter(param_name, with_decryption), filters
-            ):
-                continue
-            result.append(self.get_parameter(param_name, with_decryption))
+            result.append(parameter)
 
         return self._get_values_nexttoken(result, max_results, next_token)
 
@@ -1384,7 +1443,7 @@ class SimpleSystemManagerBackend(BaseBackend):
             next_token = None
         return values, next_token
 
-    def get_parameter_history(self, name, with_decryption, next_token, max_results=50):
+    def get_parameter_history(self, name, next_token, max_results=50):
 
         if max_results > PARAMETER_HISTORY_MAX_RESULTS:
             raise ValidationException(
@@ -1484,7 +1543,7 @@ class SimpleSystemManagerBackend(BaseBackend):
         # True if no false match (or no filters at all)
         return True
 
-    def get_parameter(self, name, with_decryption):
+    def get_parameter(self, name):
         name_parts = name.split(":")
         name_prefix = name_parts[0]
 
@@ -1595,7 +1654,7 @@ class SimpleSystemManagerBackend(BaseBackend):
         name,
         description,
         value,
-        type,
+        parameter_type,
         allowed_pattern,
         keyid,
         overwrite,
@@ -1659,7 +1718,7 @@ class SimpleSystemManagerBackend(BaseBackend):
             Parameter(
                 name=name,
                 value=value,
-                type=type,
+                parameter_type=parameter_type,
                 description=description,
                 allowed_pattern=allowed_pattern,
                 keyid=keyid,
@@ -1758,9 +1817,10 @@ class SimpleSystemManagerBackend(BaseBackend):
 
         return {"Commands": [command.response_object() for command in commands]}
 
-    def get_command_by_id(self, id):
+    def get_command_by_id(self, command_id):
         command = next(
-            (command for command in self._commands if command.command_id == id), None
+            (command for command in self._commands if command.command_id == command_id),
+            None,
         )
 
         if command is None:
@@ -1843,10 +1903,4 @@ class SimpleSystemManagerBackend(BaseBackend):
         del self.windows[window_id]
 
 
-ssm_backends = {}
-for region in Session().get_available_regions("ssm"):
-    ssm_backends[region] = SimpleSystemManagerBackend(region)
-for region in Session().get_available_regions("ssm", partition_name="aws-us-gov"):
-    ssm_backends[region] = SimpleSystemManagerBackend(region)
-for region in Session().get_available_regions("ssm", partition_name="aws-cn"):
-    ssm_backends[region] = SimpleSystemManagerBackend(region)
+ssm_backends = BackendDict(SimpleSystemManagerBackend, "ssm")

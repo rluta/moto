@@ -19,11 +19,12 @@ class ECRResponse(BaseResponse):
         except ValueError:
             return {}
 
-    def _get_param(self, param, if_none=None):
-        return self.request_params.get(param, if_none)
+    def _get_param(self, param_name, if_none=None):
+        return self.request_params.get(param_name, if_none)
 
     def create_repository(self):
         repository_name = self._get_param("repositoryName")
+        registry_id = self._get_param("registryId")
         encryption_config = self._get_param("encryptionConfiguration")
         image_scan_config = self._get_param("imageScanningConfiguration")
         image_tag_mutablility = self._get_param("imageTagMutability")
@@ -31,6 +32,7 @@ class ECRResponse(BaseResponse):
 
         repository = self.ecr_backend.create_repository(
             repository_name=repository_name,
+            registry_id=registry_id,
             encryption_config=encryption_config,
             image_scan_config=image_scan_config,
             image_tag_mutablility=image_tag_mutablility,
@@ -104,10 +106,9 @@ class ECRResponse(BaseResponse):
         repository_str = self._get_param("repositoryName")
         registry_id = self._get_param("registryId")
         image_ids = self._get_param("imageIds")
-        accepted_media_types = self._get_param("acceptedMediaTypes")
 
         response = self.ecr_backend.batch_get_image(
-            repository_str, registry_id, image_ids, accepted_media_types
+            repository_str, registry_id, image_ids
         )
         return json.dumps(response)
 
@@ -123,7 +124,7 @@ class ECRResponse(BaseResponse):
 
         return json.dumps(
             self.ecr_backend.delete_repository_policy(
-                registry_id=registry_id, repository_name=repository_name,
+                registry_id=registry_id, repository_name=repository_name
             )
         )
 
@@ -158,7 +159,7 @@ class ECRResponse(BaseResponse):
 
         return json.dumps(
             self.ecr_backend.get_repository_policy(
-                registry_id=registry_id, repository_name=repository_name,
+                registry_id=registry_id, repository_name=repository_name
             )
         )
 
@@ -250,7 +251,7 @@ class ECRResponse(BaseResponse):
 
         return json.dumps(
             self.ecr_backend.get_lifecycle_policy(
-                registry_id=registry_id, repository_name=repository_name,
+                registry_id=registry_id, repository_name=repository_name
             )
         )
 
@@ -260,7 +261,7 @@ class ECRResponse(BaseResponse):
 
         return json.dumps(
             self.ecr_backend.delete_lifecycle_policy(
-                registry_id=registry_id, repository_name=repository_name,
+                registry_id=registry_id, repository_name=repository_name
             )
         )
 

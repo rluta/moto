@@ -1,6 +1,9 @@
 import json
 import os
 
+from functools import lru_cache
+
+
 TEST_SERVER_MODE = os.environ.get("TEST_SERVER_MODE", "0").lower() == "true"
 INITIAL_NO_AUTH_ACTION_COUNT = float(
     os.environ.get("INITIAL_NO_AUTH_ACTION_COUNT", float("inf"))
@@ -43,20 +46,42 @@ def get_s3_default_key_buffer_size():
 
 
 def ecs_new_arn_format():
-    return os.environ.get("MOTO_ECS_NEW_ARN", "false").lower() == "true"
+    # True by default - only the value 'false' will return false
+    return os.environ.get("MOTO_ECS_NEW_ARN", "true").lower() != "false"
+
+
+def allow_unknown_region():
+    return os.environ.get("MOTO_ALLOW_NONEXISTENT_REGION", "false").lower() == "true"
 
 
 def moto_server_port():
     return os.environ.get("MOTO_PORT") or "5000"
 
 
+@lru_cache()
 def moto_server_host():
-    _port = moto_server_port()
     if is_docker():
-        host = get_docker_host()
+        return get_docker_host()
     else:
-        host = "http://host.docker.internal"
-    return f"{host}:{_port}"
+        return "http://host.docker.internal"
+
+
+def moto_lambda_image():
+    return os.environ.get("MOTO_DOCKER_LAMBDA_IMAGE", "lambci/lambda")
+
+
+def moto_network_name():
+    return os.environ.get("MOTO_DOCKER_NETWORK_NAME")
+
+
+def moto_network_mode():
+    return os.environ.get("MOTO_DOCKER_NETWORK_MODE")
+
+
+def test_server_mode_endpoint():
+    return os.environ.get(
+        "TEST_SERVER_MODE_ENDPOINT", f"http://localhost:{moto_server_port()}"
+    )
 
 
 def is_docker():
@@ -72,7 +97,20 @@ def get_docker_host():
     try:
         cmd = "curl -s --unix-socket /run/docker.sock http://docker/containers/$HOSTNAME/json"
         container_info = os.popen(cmd).read()
-        _ip = json.loads(container_info)["NetworkSettings"]["IPAddress"]
+        network_settings = json.loads(container_info)["NetworkSettings"]
+        network_name = moto_network_name()
+        if network_name and network_name in network_settings["Networks"]:
+            _ip = network_settings["Networks"][network_name]["IPAddress"]
+        else:
+            _ip = network_settings["IPAddress"]
+            if network_name:
+                print(
+                    f"WARNING - Moto couldn't find network '{network_name}' - defaulting to {_ip}"
+                )
         return f"http://{_ip}"
-    except:  # noqa
+    except Exception as e:  # noqa
+        print(
+            "WARNING - Unable to parse Docker API response. Defaulting to 'host.docker.internal'"
+        )
+        print(f"{type(e)}::{e}")
         return "http://host.docker.internal"

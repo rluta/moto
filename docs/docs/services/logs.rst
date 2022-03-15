@@ -27,7 +27,7 @@ logs
 
 - [ ] associate_kms_key
 - [ ] cancel_export_task
-- [ ] create_export_task
+- [X] create_export_task
 - [X] create_log_group
 - [X] create_log_stream
 - [ ] delete_destination
@@ -66,6 +66,10 @@ logs
 - [ ] put_destination
 - [ ] put_destination_policy
 - [X] put_log_events
+  
+        The SequenceToken-parameter is not yet implemented
+        
+
 - [X] put_metric_filter
 - [ ] put_query_definition
 - [X] put_resource_policy

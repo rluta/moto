@@ -7,10 +7,13 @@ import random
 import re
 import string
 from botocore.exceptions import ClientError
+from boto3 import Session
+from moto.settings import allow_unknown_region
 from urllib.parse import urlparse
 
 
 REQUEST_ID_LONG = string.digits + string.ascii_uppercase
+HEX_CHARS = list(range(10)) + ["a", "b", "c", "d", "e", "f"]
 
 
 def camelcase_to_underscores(argument):
@@ -71,8 +74,7 @@ def method_names_from_class(clazz):
 
 
 def get_random_hex(length=8):
-    chars = list(range(10)) + ["a", "b", "c", "d", "e", "f"]
-    return "".join(str(random.choice(chars)) for x in range(length))
+    return "".join(str(random.choice(HEX_CHARS)) for _ in range(length))
 
 
 def get_random_message_id():
@@ -104,29 +106,7 @@ def convert_regex_to_flask_path(url_path):
     return url_path
 
 
-class convert_httpretty_response(object):
-    def __init__(self, callback):
-        self.callback = callback
-
-    @property
-    def __name__(self):
-        # For instance methods, use class and method names. Otherwise
-        # use module and method name
-        if inspect.ismethod(self.callback):
-            outer = self.callback.__self__.__class__.__name__
-        else:
-            outer = self.callback.__module__
-        return "{0}.{1}".format(outer, self.callback.__name__)
-
-    def __call__(self, request, url, headers, **kwargs):
-        result = self.callback(request, url, headers)
-        status, headers, response = result
-        if "server" not in headers:
-            headers["server"] = "amazon.com"
-        return status, headers, response
-
-
-class convert_flask_to_httpretty_response(object):
+class convert_to_flask_response(object):
     def __init__(self, callback):
         self.callback = callback
 
@@ -325,11 +305,11 @@ def tags_from_query_string(
             tag_index = key.replace(prefix + ".", "").replace("." + key_suffix, "")
             tag_key = querystring_dict.get(
                 "{prefix}.{index}.{key_suffix}".format(
-                    prefix=prefix, index=tag_index, key_suffix=key_suffix,
+                    prefix=prefix, index=tag_index, key_suffix=key_suffix
                 )
             )[0]
             tag_value_key = "{prefix}.{index}.{value_suffix}".format(
-                prefix=prefix, index=tag_index, value_suffix=value_suffix,
+                prefix=prefix, index=tag_index, value_suffix=value_suffix
             )
             if tag_value_key in querystring_dict:
                 response_values[tag_key] = querystring_dict.get(tag_value_key)[0]
@@ -401,7 +381,7 @@ def merge_dicts(dict1, dict2, remove_nulls=False):
 
 def aws_api_matches(pattern, string):
     """
-        AWS API can match a value based on a glob, or an exact match
+    AWS API can match a value based on a glob, or an exact match
     """
     # use a negative lookback regex to match stars that are not prefixed with a backslash
     # and replace all stars not prefixed w/ a backslash with '.*' to take this from "glob" to PCRE syntax
@@ -418,3 +398,29 @@ def aws_api_matches(pattern, string):
         return True
     else:
         return False
+
+
+class BackendDict(dict):
+    def __init__(self, fn, service_name):
+        self.fn = fn
+        sess = Session()
+        self.regions = list(sess.get_available_regions(service_name))
+        self.regions.extend(
+            sess.get_available_regions(service_name, partition_name="aws-us-gov")
+        )
+        self.regions.extend(
+            sess.get_available_regions(service_name, partition_name="aws-cn")
+        )
+
+    def __contains__(self, item):
+        return item in self.regions or item in self.keys()
+
+    def __getitem__(self, item):
+        if item in self.keys():
+            return super().__getitem__(item)
+        # Create the backend for a specific region
+        if item in self.regions and item not in self.keys():
+            super().__setitem__(item, self.fn(item))
+        if item not in self.regions and allow_unknown_region():
+            super().__setitem__(item, self.fn(item))
+        return super().__getitem__(item)

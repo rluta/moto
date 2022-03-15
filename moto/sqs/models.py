@@ -10,8 +10,6 @@ from copy import deepcopy
 from typing import Dict
 from xml.sax.saxutils import escape
 
-from boto3 import Session
-
 from moto.core.exceptions import RESTError
 from moto.core import BaseBackend, BaseModel, CloudFormationModel
 from moto.core.utils import (
@@ -20,6 +18,7 @@ from moto.core.utils import (
     unix_time,
     unix_time_millis,
     tags_from_cloudformation_tags_list,
+    BackendDict,
 )
 from .utils import generate_receipt_handle
 from .exceptions import (
@@ -38,7 +37,7 @@ from .exceptions import (
     InvalidAttributeValue,
 )
 
-from moto.core import ACCOUNT_ID as DEFAULT_ACCOUNT_ID
+from moto.core import ACCOUNT_ID
 
 DEFAULT_SENDER_ID = "AIDAIT2UOQQY3AUEKVGXU"
 
@@ -67,7 +66,7 @@ DEDUPLICATION_TIME_IN_SECONDS = 300
 
 
 class Message(BaseModel):
-    def __init__(self, message_id, body, system_attributes={}):
+    def __init__(self, message_id, body, system_attributes=None):
         self.id = message_id
         self._body = body
         self.message_attributes = {}
@@ -82,7 +81,7 @@ class Message(BaseModel):
         self.sequence_number = None
         self.visible_at = 0
         self.delayed_until = 0
-        self.system_attributes = system_attributes
+        self.system_attributes = system_attributes or {}
 
     @property
     def body_md5(self):
@@ -151,7 +150,7 @@ class Message(BaseModel):
 
     @property
     def body(self):
-        return escape(self._body)
+        return escape(self._body).replace('"', "&quot;").replace("\r", "&#xD;")
 
     def mark_sent(self, delay_seconds=None):
         self.sent_timestamp = int(unix_time_millis())
@@ -263,7 +262,7 @@ class Queue(CloudFormationModel):
         now = unix_time()
         self.created_timestamp = now
         self.queue_arn = "arn:aws:sqs:{0}:{1}:{2}".format(
-            self.region, DEFAULT_ACCOUNT_ID, self.name
+            self.region, ACCOUNT_ID, self.name
         )
         self.dead_letter_queue = None
 
@@ -328,22 +327,35 @@ class Queue(CloudFormationModel):
             if key in integer_fields:
                 value = int(value)
             if key in bool_fields:
-                value = value == "true"
+                value = str(value).lower() == "true"
 
             if key in ["Policy", "RedrivePolicy"] and value is not None:
                 continue
 
             setattr(self, camelcase_to_underscores(key), value)
 
-        if attributes.get("RedrivePolicy", None):
+        if attributes.get("RedrivePolicy", None) is not None:
             self._setup_dlq(attributes["RedrivePolicy"])
 
-        if attributes.get("Policy"):
-            self.policy = attributes["Policy"]
+        self.policy = attributes.get("Policy")
 
         self.last_modified_timestamp = now
 
+    @staticmethod
+    def _is_empty_redrive_policy(policy):
+        if isinstance(policy, str):
+            if policy == "" or len(json.loads(policy)) == 0:
+                return True
+        elif isinstance(policy, dict) and len(policy) == 0:
+            return True
+
+        return False
+
     def _setup_dlq(self, policy):
+        if Queue._is_empty_redrive_policy(policy):
+            self.redrive_policy = None
+            self.dead_letter_queue = None
+            return
 
         if isinstance(policy, str):
             try:
@@ -442,8 +454,11 @@ class Queue(CloudFormationModel):
     def delete_from_cloudformation_json(
         cls, resource_name, cloudformation_json, region_name
     ):
+        # ResourceName will be the full queue URL - we only need the name
+        # https://sqs.us-west-1.amazonaws.com/123456789012/queue_name
+        queue_name = resource_name.split("/")[-1]
         sqs_backend = sqs_backends[region_name]
-        sqs_backend.delete_queue(resource_name)
+        sqs_backend.delete_queue(queue_name)
 
     @property
     def approximate_number_of_messages_delayed(self):
@@ -459,7 +474,7 @@ class Queue(CloudFormationModel):
 
     @property
     def physical_resource_id(self):
-        return self.name
+        return f"https://sqs.{self.region}.amazonaws.com/{ACCOUNT_ID}/{self.name}"
 
     @property
     def attributes(self):
@@ -493,7 +508,7 @@ class Queue(CloudFormationModel):
 
     def url(self, request_url):
         return "{0}://{1}/{2}/{3}".format(
-            request_url.scheme, request_url.netloc, DEFAULT_ACCOUNT_ID, self.name
+            request_url.scheme, request_url.netloc, ACCOUNT_ID, self.name
         )
 
     @property
@@ -574,8 +589,8 @@ class Queue(CloudFormationModel):
         self._messages = new_messages
 
     @classmethod
-    def has_cfn_attr(cls, attribute_name):
-        return attribute_name in ["Arn", "QueueName"]
+    def has_cfn_attr(cls, attr):
+        return attr in ["Arn", "QueueName"]
 
     def get_cfn_attribute(self, attribute_name):
         from moto.cloudformation.exceptions import UnformattedGetAttTemplateException
@@ -618,7 +633,7 @@ class SQSBackend(BaseBackend):
     def __init__(self, region_name):
         self.region_name = region_name
         self.queues: Dict[str, Queue] = {}
-        super(SQSBackend, self).__init__()
+        super().__init__()
 
     def reset(self):
         region_name = self.region_name
@@ -816,7 +831,7 @@ class SQSBackend(BaseBackend):
             raise TooManyEntriesInBatchRequest(len(entries))
 
         messages = []
-        for index, entry in entries.items():
+        for entry in entries.values():
             # Loop through looking for messages
             message = self.send_message(
                 queue_name,
@@ -834,10 +849,10 @@ class SQSBackend(BaseBackend):
 
     def _get_first_duplicate_id(self, ids):
         unique_ids = set()
-        for id in ids:
-            if id in unique_ids:
-                return id
-            unique_ids.add(id)
+        for _id in ids:
+            if _id in unique_ids:
+                return _id
+            unique_ids.add(_id)
         return None
 
     def receive_messages(
@@ -1095,10 +1110,4 @@ class SQSBackend(BaseBackend):
         return True
 
 
-sqs_backends = {}
-for region in Session().get_available_regions("sqs"):
-    sqs_backends[region] = SQSBackend(region)
-for region in Session().get_available_regions("sqs", partition_name="aws-us-gov"):
-    sqs_backends[region] = SQSBackend(region)
-for region in Session().get_available_regions("sqs", partition_name="aws-cn"):
-    sqs_backends[region] = SQSBackend(region)
+sqs_backends = BackendDict(SQSBackend, "sqs")

@@ -12,6 +12,8 @@
 lambda
 ======
 
+.. autoclass:: moto.awslambda.models.LambdaBackend
+
 |start-h3| Example usage |end-h3|
 
 .. sourcecode:: python
@@ -42,7 +44,7 @@ lambda
 - [ ] delete_provisioned_concurrency_config
 - [ ] get_account_settings
 - [ ] get_alias
-- [ ] get_code_signing_config
+- [X] get_code_signing_config
 - [X] get_event_source_mapping
 - [X] get_function
 - [ ] get_function_code_signing_config

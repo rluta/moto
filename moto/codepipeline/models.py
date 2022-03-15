@@ -1,8 +1,7 @@
 import json
 from datetime import datetime
 
-from boto3 import Session
-from moto.core.utils import iso_8601_datetime_with_milliseconds
+from moto.core.utils import iso_8601_datetime_with_milliseconds, BackendDict
 
 from moto.iam.exceptions import IAMNotFoundException
 
@@ -68,8 +67,14 @@ class CodePipeline(BaseModel):
 
 
 class CodePipelineBackend(BaseBackend):
-    def __init__(self):
+    def __init__(self, region=None):
         self.pipelines = {}
+        self.region = region
+
+    def reset(self):
+        region_name = self.region
+        self.__dict__ = {}
+        self.__init__(region_name)
 
     @staticmethod
     def default_vpc_endpoint_service(service_region, zones):
@@ -82,7 +87,7 @@ class CodePipelineBackend(BaseBackend):
     def iam_backend(self):
         return iam_backends["global"]
 
-    def create_pipeline(self, region, pipeline, tags):
+    def create_pipeline(self, pipeline, tags):
         if pipeline["name"] in self.pipelines:
             raise InvalidStructureException(
                 "A pipeline with the name '{0}' already exists in account '{1}'".format(
@@ -109,7 +114,7 @@ class CodePipelineBackend(BaseBackend):
                 "Pipeline has only 1 stage(s). There should be a minimum of 2 stages in a pipeline"
             )
 
-        self.pipelines[pipeline["name"]] = CodePipeline(region, pipeline)
+        self.pipelines[pipeline["name"]] = CodePipeline(self.region, pipeline)
 
         if tags:
             self.pipelines[pipeline["name"]].validate_tags(tags)
@@ -212,12 +217,4 @@ class CodePipelineBackend(BaseBackend):
             pipeline.tags.pop(key, None)
 
 
-codepipeline_backends = {}
-for region in Session().get_available_regions("codepipeline"):
-    codepipeline_backends[region] = CodePipelineBackend()
-for region in Session().get_available_regions(
-    "codepipeline", partition_name="aws-us-gov"
-):
-    codepipeline_backends[region] = CodePipelineBackend()
-for region in Session().get_available_regions("codepipeline", partition_name="aws-cn"):
-    codepipeline_backends[region] = CodePipelineBackend()
+codepipeline_backends = BackendDict(CodePipelineBackend, "codepipeline")

@@ -14,7 +14,7 @@ from unittest import SkipTest
 
 from moto import (
     mock_cloudformation,
-    mock_dynamodb2,
+    mock_dynamodb,
     mock_s3,
     mock_sns,
     mock_sqs,
@@ -25,7 +25,6 @@ from moto import (
 from moto import settings
 from moto.core import ACCOUNT_ID
 from moto.cloudformation import cloudformation_backends
-from .test_cloudformation_stack_crud import dummy_template_json2, dummy_template_json4
 
 from tests import EXAMPLE_AMI_ID
 
@@ -48,6 +47,12 @@ dummy_template = {
     },
 }
 
+dummy_template2 = {
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Stack 2",
+    "Resources": {},
+}
+
 dummy_template3 = {
     "AWSTemplateFormatVersion": "2010-09-09",
     "Description": "Stack 3",
@@ -56,6 +61,29 @@ dummy_template3 = {
     },
 }
 
+dummy_template4 = {
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Resources": {
+        "myDynamoDBTable": {
+            "Type": "AWS::DynamoDB::Table",
+            "Properties": {
+                "AttributeDefinitions": [
+                    {"AttributeName": "Name", "AttributeType": "S"},
+                    {"AttributeName": "Age", "AttributeType": "S"},
+                ],
+                "KeySchema": [
+                    {"AttributeName": "Name", "KeyType": "HASH"},
+                    {"AttributeName": "Age", "KeyType": "RANGE"},
+                ],
+                "ProvisionedThroughput": {
+                    "ReadCapacityUnits": 5,
+                    "WriteCapacityUnits": 5,
+                },
+                "TableName": "Person",
+            },
+        }
+    },
+}
 
 dummy_template_with_parameters = {
     "AWSTemplateFormatVersion": "2010-09-09",
@@ -236,7 +264,7 @@ dummy_redrive_template = {
         },
         "DeadLetterQueue": {
             "Type": "AWS::SQS::Queue",
-            "Properties": {"FifoQueue": True},
+            "Properties": {"QueueName": "deadletterqueue.fifo", "FifoQueue": True},
         },
     },
 }
@@ -278,6 +306,8 @@ dummy_update_template_json = json.dumps(dummy_update_template)
 dummy_output_template_json = json.dumps(dummy_output_template)
 dummy_import_template_json = json.dumps(dummy_import_template)
 dummy_redrive_template_json = json.dumps(dummy_redrive_template)
+dummy_template_json2 = json.dumps(dummy_template2)
+dummy_template_json4 = json.dumps(dummy_template4)
 dummy_unknown_template_json = json.dumps(dummy_unknown_template)
 
 
@@ -831,7 +861,7 @@ def test_boto3_describe_stack_set_params():
 def test_boto3_describe_stack_set_by_id():
     cf_conn = boto3.client("cloudformation", region_name="us-east-1")
     response = cf_conn.create_stack_set(
-        StackSetName="test_stack", TemplateBody=dummy_template_json,
+        StackSetName="test_stack", TemplateBody=dummy_template_json
     )
 
     stack_set_id = response["StackSetId"]
@@ -1170,14 +1200,12 @@ def test_boto3_update_stack_fail_update_same_template_body():
     ]
 
     cf_conn.create_stack(
-        StackName=name, TemplateBody=dummy_template_yaml_with_ref, Parameters=params,
+        StackName=name, TemplateBody=dummy_template_yaml_with_ref, Parameters=params
     )
 
     with pytest.raises(ClientError) as exp:
         cf_conn.update_stack(
-            StackName=name,
-            TemplateBody=dummy_template_yaml_with_ref,
-            Parameters=params,
+            StackName=name, TemplateBody=dummy_template_yaml_with_ref, Parameters=params
         )
     exp_err = exp.value.response.get("Error")
     exp_metadata = exp.value.response.get("ResponseMetadata")
@@ -2079,17 +2107,13 @@ def test_non_json_redrive_policy():
 @mock_cloudformation
 def test_boto3_create_duplicate_stack():
     cf_conn = boto3.client("cloudformation", region_name="us-east-1")
-    cf_conn.create_stack(
-        StackName="test_stack", TemplateBody=dummy_template_json,
-    )
+    cf_conn.create_stack(StackName="test_stack", TemplateBody=dummy_template_json)
 
     with pytest.raises(ClientError):
-        cf_conn.create_stack(
-            StackName="test_stack", TemplateBody=dummy_template_json,
-        )
+        cf_conn.create_stack(StackName="test_stack", TemplateBody=dummy_template_json)
 
 
-@mock_dynamodb2
+@mock_dynamodb
 @mock_cloudformation
 def test_delete_stack_dynamo_template():
     conn = boto3.client("cloudformation", region_name="us-east-1")
@@ -2103,7 +2127,7 @@ def test_delete_stack_dynamo_template():
     conn.create_stack(StackName="test_stack", TemplateBody=dummy_template_json4)
 
 
-@mock_dynamodb2
+@mock_dynamodb
 @mock_cloudformation
 @mock_lambda
 def test_create_stack_lambda_and_dynamodb():
@@ -2162,7 +2186,7 @@ def test_create_stack_lambda_and_dynamodb():
     try:
         os.environ["VALIDATE_LAMBDA_S3"] = "false"
         cf.create_stack(
-            StackName="test_stack_lambda", TemplateBody=json.dumps(template),
+            StackName="test_stack_lambda", TemplateBody=json.dumps(template)
         )
     finally:
         os.environ["VALIDATE_LAMBDA_S3"] = validate_s3_before

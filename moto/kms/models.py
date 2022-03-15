@@ -3,10 +3,8 @@ import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-from boto3 import Session
-
 from moto.core import ACCOUNT_ID, BaseBackend, CloudFormationModel
-from moto.core.utils import unix_time
+from moto.core.utils import unix_time, BackendDict
 from moto.utilities.tagging_service import TaggingService
 from moto.core.exceptions import JsonRESTError
 
@@ -150,8 +148,8 @@ class Key(CloudFormationModel):
         return key
 
     @classmethod
-    def has_cfn_attr(cls, attribute):
-        return attribute in ["Arn"]
+    def has_cfn_attr(cls, attr):
+        return attr in ["Arn"]
 
     def get_cfn_attribute(self, attribute_name):
         from moto.cloudformation.exceptions import UnformattedGetAttTemplateException
@@ -182,7 +180,7 @@ class KmsBackend(BaseBackend):
         )
 
     def _generate_default_keys(self, alias_name):
-        """Creates default kms keys """
+        """Creates default kms keys"""
         if alias_name in RESERVED_ALIASES:
             key = self.create_key(
                 None,
@@ -363,9 +361,7 @@ class KmsBackend(BaseBackend):
         )
         return new_ciphertext_blob, decrypting_arn, encrypting_arn
 
-    def generate_data_key(
-        self, key_id, encryption_context, number_of_bytes, key_spec, grant_tokens
-    ):
+    def generate_data_key(self, key_id, encryption_context, number_of_bytes, key_spec):
         key_id = self.any_id_to_key_id(key_id)
 
         if key_spec:
@@ -415,10 +411,4 @@ class KmsBackend(BaseBackend):
         )
 
 
-kms_backends = {}
-for region in Session().get_available_regions("kms"):
-    kms_backends[region] = KmsBackend(region)
-for region in Session().get_available_regions("kms", partition_name="aws-us-gov"):
-    kms_backends[region] = KmsBackend(region)
-for region in Session().get_available_regions("kms", partition_name="aws-cn"):
-    kms_backends[region] = KmsBackend(region)
+kms_backends = BackendDict(KmsBackend, "kms")
