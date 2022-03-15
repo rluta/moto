@@ -10,6 +10,10 @@ class CustomRegistry(registries.FirstMatchRegistry):
      - CallbackResponses are not discarded after first use - users can mock the same URL as often as they like
     """
 
+    def add(self, response):
+        if response not in self.registered:
+            super().add(response)
+            
     def find(self, request):
         found = []
         match_failed_reasons = []
