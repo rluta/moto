@@ -278,14 +278,11 @@ class GlueResponse(BaseResponse):
 
         return json.dumps(out)
 
-
     def get_user_defined_functions(self):
         pattern = self.parameters.get("pattern")
         functions = self.glue_backend.get_user_defined_functions(pattern)
 
-        return json.dumps({
-            "UserDefinedFunctions": functions
-        })
+        return json.dumps({"UserDefinedFunctions": functions})
 
     def create_crawler(self):
         self.glue_backend.create_crawler(

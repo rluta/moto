@@ -206,6 +206,7 @@ class GlueBackend(BaseBackend):
     def get_user_defined_functions(self, pattern):
         return []
 
+
 class FakeDatabase(BaseModel):
     def __init__(self, database_name, database_input):
         self.name = database_name
@@ -239,9 +240,13 @@ class FakeTable(BaseModel):
 
     def update(self, table_input):
         table_info = dict(table_input)
-        table_info['StorageDescriptor'] = FakeStorageDescriptor(table_input['StorageDescriptor']).as_dict()
-        if 'UpdateTime' not in table_info:
-            table_info['UpdateTime'] = datetime.utcnow().replace(tzinfo=pytz.utc).isoformat()
+        table_info["StorageDescriptor"] = FakeStorageDescriptor(
+            table_input["StorageDescriptor"]
+        ).as_dict()
+        if "UpdateTime" not in table_info:
+            table_info["UpdateTime"] = (
+                datetime.utcnow().replace(tzinfo=pytz.utc).isoformat()
+            )
         self.versions.append(table_info)
 
     def get_version(self, ver):
@@ -258,12 +263,13 @@ class FakeTable(BaseModel):
             raise VersionNotFoundException()
 
     def as_dict(self, version=-1):
-        obj = {"DatabaseName": self.database_name,
-               "Name": self.name,
-               "Retention": 0,
-               "CreateTime": self.create_time,
-               "LastAccessTime": datetime.utcnow().replace(tzinfo=pytz.utc).isoformat()
-               }
+        obj = {
+            "DatabaseName": self.database_name,
+            "Name": self.name,
+            "Retention": 0,
+            "CreateTime": self.create_time,
+            "LastAccessTime": datetime.utcnow().replace(tzinfo=pytz.utc).isoformat(),
+        }
         obj.update(self.get_version(version))
         return obj
 
@@ -344,7 +350,7 @@ class FakeStorageDescriptor(BaseModel):
             "BucketColumns": self.bucket_columns,
             "SortColumns": self.sort_columns,
             "Parameters": {},
-            "StoredAsSubDirectories": self.stored_as_sub_directories
+            "StoredAsSubDirectories": self.stored_as_sub_directories,
         }
         obj.update(self.storage_input)
         return obj
