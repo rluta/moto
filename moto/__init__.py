@@ -207,7 +207,7 @@ mock_all = MockAll
 # logging.getLogger('boto').setLevel(logging.CRITICAL)
 
 __title__ = "moto"
-__version__ = "2.3.3.dev0+al"
+__version__ = "2.3.3.dev1+al"
 
 
 try:
