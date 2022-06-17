@@ -10,7 +10,7 @@ from moto import mock_ec2, mock_route53
 
 
 @mock_route53
-def test_create_hosted_zone_boto3():
+def test_create_hosted_zone():
     conn = boto3.client("route53", region_name="us-east-1")
     response = conn.create_hosted_zone(
         Name="testdns.aws.com.", CallerReference=str(hash("foo"))
@@ -19,7 +19,7 @@ def test_create_hosted_zone_boto3():
     firstzone.should.have.key("Id").match(r"/hostedzone/[A-Z0-9]+")
     firstzone.should.have.key("Name").equal("testdns.aws.com.")
     firstzone.should.have.key("Config").equal({"PrivateZone": False})
-    firstzone.should.have.key("ResourceRecordSetCount").equal(0)
+    firstzone.should.have.key("ResourceRecordSetCount").equal(1)
 
     delegation = response["DelegationSet"]
     delegation.should.have.key("NameServers").length_of(4)
@@ -63,6 +63,39 @@ def test_delete_hosted_zone():
 
     res = conn.list_hosted_zones()["HostedZones"]
     res.should.have.length_of(1)
+
+
+@mock_route53
+def test_delete_hosted_zone_with_change_sets():
+    conn = boto3.client("route53", region_name="us-east-1")
+
+    zone_id = conn.create_hosted_zone(
+        Name="testdns.aws.com.", CallerReference=str(hash("foo"))
+    )["HostedZone"]["Id"]
+
+    conn.change_resource_record_sets(
+        HostedZoneId=zone_id,
+        ChangeBatch={
+            "Changes": [
+                {
+                    "Action": "CREATE",
+                    "ResourceRecordSet": {
+                        "Name": "foo.bar.testdns.aws.com",
+                        "Type": "A",
+                        "ResourceRecords": [{"Value": "1.2.3.4"}],
+                    },
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(ClientError) as exc:
+        conn.delete_hosted_zone(Id=zone_id)
+    err = exc.value.response["Error"]
+    err["Code"].should.equal("HostedZoneNotEmpty")
+    err["Message"].should.equal(
+        "The hosted zone contains resource records that are not SOA or NS records."
+    )
 
 
 @mock_route53
@@ -156,7 +189,7 @@ def test_list_resource_record_set_unknown_type():
 
 
 @mock_route53
-def test_create_health_check_boto3():
+def test_create_health_check():
     conn = boto3.client("route53", region_name="us-east-1")
 
     check = conn.create_health_check(
@@ -189,7 +222,7 @@ def test_create_health_check_boto3():
 
 
 @mock_route53
-def test_list_health_checks_boto3():
+def test_list_health_checks():
     conn = boto3.client("route53", region_name="us-east-1")
 
     conn.list_health_checks()["HealthChecks"].should.have.length_of(0)
@@ -214,7 +247,7 @@ def test_list_health_checks_boto3():
 
 
 @mock_route53
-def test_delete_health_checks_boto3():
+def test_delete_health_checks():
     conn = boto3.client("route53", region_name="us-east-1")
 
     conn.list_health_checks()["HealthChecks"].should.have.length_of(0)
@@ -240,7 +273,7 @@ def test_delete_health_checks_boto3():
 
 
 @mock_route53
-def test_use_health_check_in_resource_record_set_boto3():
+def test_use_health_check_in_resource_record_set():
     conn = boto3.client("route53", region_name="us-east-1")
 
     check = conn.create_health_check(
@@ -281,12 +314,12 @@ def test_use_health_check_in_resource_record_set_boto3():
     record_sets = conn.list_resource_record_sets(HostedZoneId=zone_id)[
         "ResourceRecordSets"
     ]
-    record_sets[0]["Name"].should.equal("foo.bar.testdns.aws.com.")
-    record_sets[0]["HealthCheckId"].should.equal(check_id)
+    record_sets[1]["Name"].should.equal("foo.bar.testdns.aws.com.")
+    record_sets[1]["HealthCheckId"].should.equal(check_id)
 
 
 @mock_route53
-def test_hosted_zone_comment_preserved_boto3():
+def test_hosted_zone_comment_preserved():
     conn = boto3.client("route53", region_name="us-east-1")
 
     firstzone = conn.create_hosted_zone(
@@ -304,7 +337,7 @@ def test_hosted_zone_comment_preserved_boto3():
 
 
 @mock_route53
-def test_deleting_weighted_route_boto3():
+def test_deleting_weighted_route():
     conn = boto3.client("route53", region_name="us-east-1")
 
     zone = conn.create_hosted_zone(
@@ -333,7 +366,7 @@ def test_deleting_weighted_route_boto3():
     cnames = conn.list_resource_record_sets(
         HostedZoneId=zone_id, StartRecordName="cname", StartRecordType="CNAME"
     )["ResourceRecordSets"]
-    cnames.should.have.length_of(2)
+    cnames.should.have.length_of(3)
 
     conn.change_resource_record_sets(
         HostedZoneId=zone_id,
@@ -354,13 +387,13 @@ def test_deleting_weighted_route_boto3():
     cnames = conn.list_resource_record_sets(
         HostedZoneId=zone_id, StartRecordName="cname", StartRecordType="CNAME"
     )["ResourceRecordSets"]
-    cnames.should.have.length_of(1)
-    cnames[0]["Name"].should.equal("cname.testdns.aws.com.")
-    cnames[0]["SetIdentifier"].should.equal("success-test-bar")
+    cnames.should.have.length_of(2)
+    cnames[1]["Name"].should.equal("cname.testdns.aws.com.")
+    cnames[1]["SetIdentifier"].should.equal("success-test-bar")
 
 
 @mock_route53
-def test_deleting_latency_route_boto3():
+def test_deleting_latency_route():
     conn = boto3.client("route53", region_name="us-east-1")
 
     zone = conn.create_hosted_zone(
@@ -393,9 +426,11 @@ def test_deleting_latency_route_boto3():
     cnames = conn.list_resource_record_sets(
         HostedZoneId=zone_id, StartRecordName="cname", StartRecordType="CNAME"
     )["ResourceRecordSets"]
-    cnames.should.have.length_of(2)
+    cnames.should.have.length_of(3)
     foo_cname = [
-        cname for cname in cnames if cname["SetIdentifier"] == "success-test-foo"
+        cname
+        for cname in cnames
+        if cname.get("SetIdentifier") and cname["SetIdentifier"] == "success-test-foo"
     ][0]
     foo_cname["Region"].should.equal("us-west-2")
 
@@ -417,14 +452,14 @@ def test_deleting_latency_route_boto3():
     cnames = conn.list_resource_record_sets(
         HostedZoneId=zone_id, StartRecordName="cname", StartRecordType="CNAME"
     )["ResourceRecordSets"]
-    cnames.should.have.length_of(1)
-    cnames[0]["SetIdentifier"].should.equal("success-test-bar")
-    cnames[0]["Region"].should.equal("us-west-1")
+    cnames.should.have.length_of(2)
+    cnames[1]["SetIdentifier"].should.equal("success-test-bar")
+    cnames[1]["Region"].should.equal("us-west-1")
 
 
 @mock_ec2
 @mock_route53
-def test_hosted_zone_private_zone_preserved_boto3():
+def test_hosted_zone_private_zone_preserved():
     # Create mock VPC so we can get a VPC ID
     region = "us-east-1"
     ec2c = boto3.client("ec2", region_name=region)
@@ -446,8 +481,8 @@ def test_hosted_zone_private_zone_preserved_boto3():
     hosted_zone["VPCs"].should.have.length_of(1)
     hosted_zone["VPCs"][0].should.have.key("VPCId")
     hosted_zone["VPCs"][0].should.have.key("VPCRegion")
-    hosted_zone["VPCs"][0]["VPCId"].should_not.be.empty
-    hosted_zone["VPCs"][0]["VPCRegion"].should_not.be.empty
+    hosted_zone["VPCs"][0]["VPCId"].should_not.equal(None)
+    hosted_zone["VPCs"][0]["VPCRegion"].should_not.equal(None)
     hosted_zone["VPCs"][0]["VPCId"].should.be.equal(vpc_id)
     hosted_zone["VPCs"][0]["VPCRegion"].should.be.equal(region)
 
@@ -471,11 +506,7 @@ def test_hosted_zone_private_zone_preserved_boto3():
     hosted_zone = conn.get_hosted_zone(Id=zone_id)
     hosted_zone["HostedZone"]["Config"]["PrivateZone"].should.equal(True)
     hosted_zone.should.have.key("VPCs")
-    hosted_zone["VPCs"].should.have.length_of(1)
-    hosted_zone["VPCs"][0].should.have.key("VPCId")
-    hosted_zone["VPCs"][0].should.have.key("VPCRegion")
-    hosted_zone["VPCs"][0]["VPCId"].should.be.empty
-    hosted_zone["VPCs"][0]["VPCRegion"].should.be.empty
+    hosted_zone["VPCs"].should.have.length_of(0)
 
     hosted_zones = conn.list_hosted_zones()
     hosted_zones["HostedZones"].should.have.length_of(2)
@@ -511,7 +542,7 @@ def test_list_or_change_tags_for_resource_request():
     response = conn.list_tags_for_resource(
         ResourceType="healthcheck", ResourceId=healthcheck_id
     )
-    response["ResourceTagSet"]["Tags"].should.be.empty
+    response["ResourceTagSet"]["Tags"].should.equal([])
 
     tag1 = {"Key": "Deploy", "Value": "True"}
     tag2 = {"Key": "Name", "Value": "UnitTest"}
@@ -575,7 +606,7 @@ def test_list_or_change_tags_for_resource_request():
     response = conn.list_tags_for_resource(
         ResourceType="healthcheck", ResourceId=healthcheck_id
     )
-    response["ResourceTagSet"]["Tags"].should.be.empty
+    response["ResourceTagSet"]["Tags"].should.equal([])
 
 
 @mock_ec2
@@ -620,8 +651,8 @@ def test_list_hosted_zones_by_name():
     b_hz_vpcs = b_hosted_zone["VPCs"][0]
     b_hz_vpcs.should.have.key("VPCId")
     b_hz_vpcs.should.have.key("VPCRegion")
-    b_hz_vpcs["VPCId"].should_not.be.empty
-    b_hz_vpcs["VPCRegion"].should_not.be.empty
+    b_hz_vpcs["VPCId"].should_not.equal("")
+    b_hz_vpcs["VPCRegion"].should_not.equal("")
     b_hz_vpcs["VPCId"].should.be.equal(vpc_id)
     b_hz_vpcs["VPCRegion"].should.be.equal(region)
 
@@ -721,13 +752,14 @@ def test_list_hosted_zones_by_vpc():
         HostedZoneConfig=dict(PrivateZone=True, Comment="test com"),
         VPC={"VPCRegion": region, "VPCId": vpc_id},
     )
+    zone_id = zone_b["HostedZone"]["Id"].split("/")[2]
     response = conn.list_hosted_zones_by_vpc(VPCId=vpc_id, VPCRegion=region)
     response.should.have.key("ResponseMetadata")
     response.should.have.key("HostedZoneSummaries")
     response["HostedZoneSummaries"].should.have.length_of(1)
     response["HostedZoneSummaries"][0].should.have.key("HostedZoneId")
     retured_zone = response["HostedZoneSummaries"][0]
-    retured_zone["HostedZoneId"].should.equal(zone_b["HostedZone"]["Id"])
+    retured_zone["HostedZoneId"].should.equal(zone_id)
     retured_zone["Name"].should.equal(zone_b["HostedZone"]["Name"])
 
 
@@ -761,8 +793,9 @@ def test_list_hosted_zones_by_vpc_with_multiple_vpcs():
     for summary in response["HostedZoneSummaries"]:
         # use the zone name as the index
         index = summary["Name"].split(".")[1]
+        zone_id = zones[index]["HostedZone"]["Id"].split("/")[2]
         summary.should.have.key("HostedZoneId")
-        summary["HostedZoneId"].should.equal(zones[index]["HostedZone"]["Id"])
+        summary["HostedZoneId"].should.equal(zone_id)
         summary.should.have.key("Name")
         summary["Name"].should.equal(zones[index]["HostedZone"]["Name"])
 
@@ -801,8 +834,8 @@ def test_change_resource_record_sets_crud_valid():
     )
 
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
-    len(response["ResourceRecordSets"]).should.equal(1)
-    a_record_detail = response["ResourceRecordSets"][0]
+    len(response["ResourceRecordSets"]).should.equal(2)
+    a_record_detail = response["ResourceRecordSets"][1]
     a_record_detail["Name"].should.equal("prod.redis.db.")
     a_record_detail["Type"].should.equal("A")
     a_record_detail["TTL"].should.equal(10)
@@ -828,8 +861,8 @@ def test_change_resource_record_sets_crud_valid():
     )
 
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
-    len(response["ResourceRecordSets"]).should.equal(1)
-    cname_record_detail = response["ResourceRecordSets"][0]
+    len(response["ResourceRecordSets"]).should.equal(2)
+    cname_record_detail = response["ResourceRecordSets"][1]
     cname_record_detail["Name"].should.equal("prod.redis.db.")
     cname_record_detail["Type"].should.equal("A")
     cname_record_detail["TTL"].should.equal(60)
@@ -859,7 +892,7 @@ def test_change_resource_record_sets_crud_valid():
     )
 
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
-    cname_alias_record_detail = response["ResourceRecordSets"][0]
+    cname_alias_record_detail = response["ResourceRecordSets"][1]
     cname_alias_record_detail["Name"].should.equal("prod.redis.db.")
     cname_alias_record_detail["Type"].should.equal("A")
     cname_alias_record_detail["TTL"].should.equal(60)
@@ -886,7 +919,7 @@ def test_change_resource_record_sets_crud_valid():
         HostedZoneId=hosted_zone_id, ChangeBatch=delete_payload
     )
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
-    len(response["ResourceRecordSets"]).should.equal(1)
+    len(response["ResourceRecordSets"]).should.equal(2)
 
     # Delete record.
     delete_payload = {
@@ -902,7 +935,7 @@ def test_change_resource_record_sets_crud_valid():
         HostedZoneId=hosted_zone_id, ChangeBatch=delete_payload
     )
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
-    len(response["ResourceRecordSets"]).should.equal(0)
+    len(response["ResourceRecordSets"]).should.equal(1)
 
 
 @mock_route53
@@ -939,8 +972,8 @@ def test_change_resource_record_sets_crud_valid_with_special_xml_chars():
     )
 
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
-    len(response["ResourceRecordSets"]).should.equal(1)
-    a_record_detail = response["ResourceRecordSets"][0]
+    len(response["ResourceRecordSets"]).should.equal(2)
+    a_record_detail = response["ResourceRecordSets"][1]
     a_record_detail["Name"].should.equal("prod.redis.db.")
     a_record_detail["Type"].should.equal("TXT")
     a_record_detail["TTL"].should.equal(10)
@@ -967,8 +1000,8 @@ def test_change_resource_record_sets_crud_valid_with_special_xml_chars():
     )
 
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
-    len(response["ResourceRecordSets"]).should.equal(1)
-    cname_record_detail = response["ResourceRecordSets"][0]
+    len(response["ResourceRecordSets"]).should.equal(2)
+    cname_record_detail = response["ResourceRecordSets"][1]
     cname_record_detail["Name"].should.equal("prod.redis.db.")
     cname_record_detail["Type"].should.equal("TXT")
     cname_record_detail["TTL"].should.equal(60)
@@ -990,7 +1023,7 @@ def test_change_resource_record_sets_crud_valid_with_special_xml_chars():
         HostedZoneId=hosted_zone_id, ChangeBatch=delete_payload
     )
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
-    len(response["ResourceRecordSets"]).should.equal(0)
+    len(response["ResourceRecordSets"]).should.equal(1)
 
 
 @mock_route53
@@ -1096,10 +1129,11 @@ def test_change_weighted_resource_record_sets():
 
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
     for record in response["ResourceRecordSets"]:
-        if record["SetIdentifier"] == "test1":
-            record["Weight"].should.equal(90)
-        if record["SetIdentifier"] == "test2":
-            record["Weight"].should.equal(10)
+        if record.get("SetIdentifier"):
+            if record["SetIdentifier"] == "test1":
+                record["Weight"].should.equal(90)
+            if record["SetIdentifier"] == "test2":
+                record["Weight"].should.equal(10)
 
 
 @mock_route53
@@ -1129,7 +1163,7 @@ def test_failover_record_sets():
     )
 
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
-    record = response["ResourceRecordSets"][0]
+    record = response["ResourceRecordSets"][1]
     record["Failover"].should.equal("PRIMARY")
 
 
@@ -1171,8 +1205,8 @@ def test_geolocation_record_sets():
 
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
     rrs = response["ResourceRecordSets"]
-    rrs[0]["GeoLocation"].should.equal({"ContinentCode": "EU"})
-    rrs[1]["GeoLocation"].should.equal({"CountryCode": "US", "SubdivisionCode": "NY"})
+    rrs[1]["GeoLocation"].should.equal({"ContinentCode": "EU"})
+    rrs[2]["GeoLocation"].should.equal({"CountryCode": "US", "SubdivisionCode": "NY"})
 
 
 @mock_route53
@@ -1210,7 +1244,7 @@ def test_change_resource_record_invalid():
         )
 
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
-    len(response["ResourceRecordSets"]).should.equal(0)
+    len(response["ResourceRecordSets"]).should.equal(1)
 
     invalid_cname_record_payload = {
         "Comment": "this should also fail",
@@ -1233,7 +1267,52 @@ def test_change_resource_record_invalid():
         )
 
     response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
-    len(response["ResourceRecordSets"]).should.equal(0)
+    len(response["ResourceRecordSets"]).should.equal(1)
+
+
+@mock_route53
+def test_change_resource_record_invalid_action_value():
+    conn = boto3.client("route53", region_name="us-east-1")
+    conn.create_hosted_zone(
+        Name="db.",
+        CallerReference=str(hash("foo")),
+        HostedZoneConfig=dict(PrivateZone=False, Comment="db"),
+    )
+
+    zones = conn.list_hosted_zones_by_name(DNSName="db.")
+    len(zones["HostedZones"]).should.equal(1)
+    zones["HostedZones"][0]["Name"].should.equal("db.")
+    hosted_zone_id = zones["HostedZones"][0]["Id"]
+
+    invalid_a_record_payload = {
+        "Comment": "this should fail",
+        "Changes": [
+            {
+                "Action": "INVALID_ACTION",
+                "ResourceRecordSet": {
+                    "Name": "prod.scooby.doo",
+                    "Type": "A",
+                    "TTL": 10,
+                    "ResourceRecords": [{"Value": "127.0.0.1"}],
+                },
+            }
+        ],
+    }
+
+    with pytest.raises(botocore.exceptions.ClientError) as exc:
+        conn.change_resource_record_sets(
+            HostedZoneId=hosted_zone_id, ChangeBatch=invalid_a_record_payload
+        )
+
+    err = exc.value.response["Error"]
+    err["Code"].should.equal("InvalidInput")
+    err["Message"].should.equal(
+        "Invalid XML ; cvc-enumeration-valid: Value 'INVALID_ACTION' is not facet-valid"
+        " with respect to enumeration '[CREATE, DELETE, UPSERT]'. It must be a value from the enumeration."
+    )
+
+    response = conn.list_resource_record_sets(HostedZoneId=hosted_zone_id)
+    len(response["ResourceRecordSets"]).should.equal(1)
 
 
 @mock_route53
@@ -1441,7 +1520,7 @@ def test_list_resource_recordset_pagination():
 
     # Create A Record.
     a_record_endpoint_payload = {
-        "Comment": f"Create 500 A records",
+        "Comment": "Create 500 A records",
         "Changes": [
             {
                 "Action": "CREATE",
@@ -1465,7 +1544,7 @@ def test_list_resource_recordset_pagination():
     response.should.have.key("ResourceRecordSets").length_of(100)
     response.should.have.key("IsTruncated").equals(True)
     response.should.have.key("MaxItems").equals("100")
-    response.should.have.key("NextRecordName").equals("env189.redis.db.")
+    response.should.have.key("NextRecordName").equals("env188.redis.db.")
     response.should.have.key("NextRecordType").equals("A")
 
     response = conn.list_resource_record_sets(
@@ -1476,7 +1555,7 @@ def test_list_resource_recordset_pagination():
     response.should.have.key("ResourceRecordSets").length_of(300)
     response.should.have.key("IsTruncated").equals(True)
     response.should.have.key("MaxItems").equals("300")
-    response.should.have.key("NextRecordName").equals("env459.redis.db.")
+    response.should.have.key("NextRecordName").equals("env458.redis.db.")
     response.should.have.key("NextRecordType").equals("A")
 
     response = conn.list_resource_record_sets(
@@ -1484,7 +1563,7 @@ def test_list_resource_recordset_pagination():
         StartRecordName=response["NextRecordName"],
         StartRecordType=response["NextRecordType"],
     )
-    response.should.have.key("ResourceRecordSets").length_of(100)
+    response.should.have.key("ResourceRecordSets").length_of(101)
     response.should.have.key("IsTruncated").equals(False)
     response.should.have.key("MaxItems").equals("300")
     response.shouldnt.have.key("NextRecordName")

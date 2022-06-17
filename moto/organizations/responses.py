@@ -51,11 +51,19 @@ class OrganizationsResponse(BaseResponse):
         )
 
     def list_organizational_units_for_parent(self):
-        return json.dumps(
-            self.organizations_backend.list_organizational_units_for_parent(
-                **self.request_params
-            )
+        max_results = self._get_int_param("MaxResults")
+        next_token = self._get_param("NextToken")
+        parent_id = self._get_param("ParentId")
+        (
+            ous,
+            next_token,
+        ) = self.organizations_backend.list_organizational_units_for_parent(
+            max_results=max_results, next_token=next_token, parent_id=parent_id
         )
+        response = {"OrganizationalUnits": ous}
+        if next_token:
+            response["NextToken"] = next_token
+        return json.dumps(response)
 
     def list_parents(self):
         return json.dumps(
@@ -65,6 +73,11 @@ class OrganizationsResponse(BaseResponse):
     def create_account(self):
         return json.dumps(
             self.organizations_backend.create_account(**self.request_params)
+        )
+
+    def close_account(self):
+        return json.dumps(
+            self.organizations_backend.close_account(**self.request_params)
         )
 
     def describe_account(self):
@@ -85,12 +98,27 @@ class OrganizationsResponse(BaseResponse):
         )
 
     def list_accounts(self):
-        return json.dumps(self.organizations_backend.list_accounts())
+        max_results = self._get_int_param("MaxResults")
+        next_token = self._get_param("NextToken")
+        accounts, next_token = self.organizations_backend.list_accounts(
+            max_results=max_results, next_token=next_token
+        )
+        response = {"Accounts": accounts}
+        if next_token:
+            response["NextToken"] = next_token
+        return json.dumps(response)
 
     def list_accounts_for_parent(self):
-        return json.dumps(
-            self.organizations_backend.list_accounts_for_parent(**self.request_params)
+        max_results = self._get_int_param("MaxResults")
+        next_token = self._get_param("NextToken")
+        parent_id = self._get_param("ParentId")
+        accounts, next_token = self.organizations_backend.list_accounts_for_parent(
+            max_results=max_results, next_token=next_token, parent_id=parent_id
         )
+        response = {"Accounts": accounts}
+        if next_token:
+            response["NextToken"] = next_token
+        return json.dumps(response)
 
     def move_account(self):
         return json.dumps(

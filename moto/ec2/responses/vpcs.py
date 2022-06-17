@@ -1,16 +1,22 @@
-from moto.core import ACCOUNT_ID
-from moto.core.responses import BaseResponse
+from moto.core import get_account_id
 from moto.core.utils import camelcase_to_underscores
-from moto.ec2.utils import add_tag_specification, filters_from_querystring
+from moto.ec2.utils import add_tag_specification
+from ._base_response import EC2BaseResponse
 
 
-class VPCs(BaseResponse):
+class VPCs(EC2BaseResponse):
     def _get_doc_date(self):
         return (
             "2013-10-15"
             if "Boto/" in self.headers.get("user-agent", "")
             else "2016-11-15"
         )
+
+    def create_default_vpc(self):
+        vpc = self.ec2_backend.create_default_vpc()
+        doc_date = self._get_doc_date()
+        template = self.response_template(CREATE_VPC_RESPONSE)
+        return template.render(vpc=vpc, doc_date=doc_date)
 
     def create_vpc(self):
         cidr_block = self._get_param("CidrBlock")
@@ -41,7 +47,7 @@ class VPCs(BaseResponse):
     def describe_vpcs(self):
         self.error_on_dryrun()
         vpc_ids = self._get_multi_param("VpcId")
-        filters = filters_from_querystring(self.querystring)
+        filters = self._filters_from_querystring()
         vpcs = self.ec2_backend.describe_vpcs(vpc_ids=vpc_ids, filters=filters)
         doc_date = (
             "2013-10-15"
@@ -68,7 +74,7 @@ class VPCs(BaseResponse):
 
     def describe_vpc_classic_link_dns_support(self):
         vpc_ids = self._get_multi_param("VpcIds")
-        filters = filters_from_querystring(self.querystring)
+        filters = self._filters_from_querystring()
         vpcs = self.ec2_backend.describe_vpcs(vpc_ids=vpc_ids, filters=filters)
         doc_date = self._get_doc_date()
         template = self.response_template(
@@ -100,7 +106,7 @@ class VPCs(BaseResponse):
 
     def describe_vpc_classic_link(self):
         vpc_ids = self._get_multi_param("VpcId")
-        filters = filters_from_querystring(self.querystring)
+        filters = self._filters_from_querystring()
         vpcs = self.ec2_backend.describe_vpcs(vpc_ids=vpc_ids, filters=filters)
         doc_date = self._get_doc_date()
         template = self.response_template(DESCRIBE_VPC_CLASSIC_LINK_RESPONSE)
@@ -219,12 +225,14 @@ class VPCs(BaseResponse):
 
     def describe_vpc_endpoints(self):
         vpc_end_points_ids = self._get_multi_param("VpcEndpointId")
-        filters = filters_from_querystring(self.querystring)
+        filters = self._filters_from_querystring()
         vpc_end_points = self.ec2_backend.describe_vpc_endpoints(
             vpc_end_point_ids=vpc_end_points_ids, filters=filters
         )
         template = self.response_template(DESCRIBE_VPC_ENDPOINT_RESPONSE)
-        return template.render(vpc_end_points=vpc_end_points, account_id=ACCOUNT_ID)
+        return template.render(
+            vpc_end_points=vpc_end_points, account_id=get_account_id()
+        )
 
     def delete_vpc_endpoints(self):
         vpc_end_points_ids = self._get_multi_param("VpcEndpointId")
@@ -255,7 +263,7 @@ class VPCs(BaseResponse):
 
     def describe_managed_prefix_lists(self):
         prefix_list_ids = self._get_multi_param("PrefixListId")
-        filters = filters_from_querystring(self.querystring)
+        filters = self._filters_from_querystring()
         managed_prefix_lists = self.ec2_backend.describe_managed_prefix_lists(
             prefix_list_ids=prefix_list_ids, filters=filters
         )
@@ -291,7 +299,7 @@ class VPCs(BaseResponse):
 
     def describe_prefix_lists(self):
         prefix_list_ids = self._get_multi_param("PrefixListId")
-        filters = filters_from_querystring(self.querystring)
+        filters = self._filters_from_querystring()
         managed_pls = self.ec2_backend.describe_managed_prefix_lists(
             prefix_list_ids=prefix_list_ids, filters=filters
         )

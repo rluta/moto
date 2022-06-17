@@ -1,16 +1,17 @@
 import base64
-import hashlib
 import fnmatch
 import random
 import re
 import ipaddress
 
+from datetime import datetime
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from moto.core import ACCOUNT_ID
+from moto.core import get_account_id
 from moto.iam import iam_backends
+from moto.utilities.utils import md5_hash
 
 EC2_RESOURCE_TO_PREFIX = {
     "customer-gateway": "cgw",
@@ -297,83 +298,17 @@ def create_dns_entries(service_name, vpc_endpoint_id):
     return dns_entries
 
 
+def utc_date_and_time():
+    x = datetime.utcnow()
+    # Better performing alternative to x.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    return "{}-{:02d}-{:02d}T{:02d}:{:02d}:{:02d}.000Z".format(
+        x.year, x.month, x.day, x.hour, x.minute, x.second
+    )
+
+
 def split_route_id(route_id):
     values = route_id.split("~")
     return values[0], values[1]
-
-
-def dhcp_configuration_from_querystring(querystring, option="DhcpConfiguration"):
-    """
-    turn:
-        {u'AWSAccessKeyId': [u'the_key'],
-         u'Action': [u'CreateDhcpOptions'],
-         u'DhcpConfiguration.1.Key': [u'domain-name'],
-         u'DhcpConfiguration.1.Value.1': [u'example.com'],
-         u'DhcpConfiguration.2.Key': [u'domain-name-servers'],
-         u'DhcpConfiguration.2.Value.1': [u'10.0.0.6'],
-         u'DhcpConfiguration.2.Value.2': [u'10.0.0.7'],
-         u'Signature': [u'uUMHYOoLM6r+sT4fhYjdNT6MHw22Wj1mafUpe0P0bY4='],
-         u'SignatureMethod': [u'HmacSHA256'],
-         u'SignatureVersion': [u'2'],
-         u'Timestamp': [u'2014-03-18T21:54:01Z'],
-         u'Version': [u'2013-10-15']}
-    into:
-        {u'domain-name': [u'example.com'], u'domain-name-servers': [u'10.0.0.6', u'10.0.0.7']}
-    """
-
-    key_needle = re.compile("{0}.[0-9]+.Key".format(option), re.UNICODE)
-    response_values = {}
-
-    for key, value in querystring.items():
-        if key_needle.match(key):
-            values = []
-            key_index = key.split(".")[1]
-            value_index = 1
-            while True:
-                value_key = "{0}.{1}.Value.{2}".format(option, key_index, value_index)
-                if value_key in querystring:
-                    values.extend(querystring[value_key])
-                else:
-                    break
-                value_index += 1
-            response_values[value[0]] = values
-    return response_values
-
-
-def filters_from_querystring(querystring_dict):
-    response_values = {}
-    last_tag_key = None
-    for key, value in sorted(querystring_dict.items()):
-        match = re.search(r"Filter.(\d).Name", key)
-        if match:
-            filter_index = match.groups()[0]
-            value_prefix = "Filter.{0}.Value".format(filter_index)
-            filter_values = [
-                filter_value[0]
-                for filter_key, filter_value in querystring_dict.items()
-                if filter_key.startswith(value_prefix)
-            ]
-            if value[0] == "tag-key":
-                last_tag_key = "tag:" + filter_values[0]
-            elif last_tag_key and value[0] == "tag-value":
-                response_values[last_tag_key] = filter_values
-            response_values[value[0]] = filter_values
-    return response_values
-
-
-def dict_from_querystring(parameter, querystring_dict):
-    use_dict = {}
-    for key, value in querystring_dict.items():
-        match = re.search(r"{0}.(\d).(\w+)".format(parameter), key)
-        if match:
-            use_dict_index = match.groups()[0]
-            use_dict_element_property = match.groups()[1]
-
-            if not use_dict.get(use_dict_index):
-                use_dict[use_dict_index] = {}
-            use_dict[use_dict_index][use_dict_element_property] = value[0]
-
-    return use_dict
 
 
 def get_attribute_value(parameter, querystring_dict):
@@ -391,7 +326,7 @@ def get_object_value(obj, attr):
     val = obj
     for key in keys:
         if key == "owner_id":
-            return ACCOUNT_ID
+            return get_account_id()
         elif hasattr(val, key):
             val = getattr(val, key)
         elif isinstance(val, dict):
@@ -716,7 +651,7 @@ def rsa_public_key_fingerprint(rsa_public_key):
         encoding=serialization.Encoding.DER,
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     )
-    fingerprint_hex = hashlib.md5(key_data).hexdigest()
+    fingerprint_hex = md5_hash(key_data).hexdigest()
     fingerprint = re.sub(r"([a-f0-9]{2})(?!$)", r"\1:", fingerprint_hex)
     return fingerprint
 
@@ -838,3 +773,16 @@ def gen_moto_amis(described_images, drop_images_missing_keys=True):
                 raise err
 
     return result
+
+
+def convert_tag_spec(tag_spec_set):
+    # IN:  [{"ResourceType": _type, "Tag": [{"Key": k, "Value": v}, ..]}]
+    # OUT: {_type: {k: v, ..}}
+    tags = {}
+    for tag_spec in tag_spec_set:
+        if tag_spec["ResourceType"] not in tags:
+            tags[tag_spec["ResourceType"]] = {}
+        tags[tag_spec["ResourceType"]].update(
+            {tag["Key"]: tag["Value"] for tag in tag_spec["Tag"]}
+        )
+    return tags

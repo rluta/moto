@@ -2,9 +2,9 @@ import datetime
 import re
 import json
 
-from moto.core import BaseBackend, BaseModel, ACCOUNT_ID
+from moto.core import BaseBackend, BaseModel, get_account_id
 from moto.core.exceptions import RESTError
-from moto.core.utils import unix_time
+from moto.core.utils import unix_time, BackendDict
 from moto.organizations import utils
 from moto.organizations.exceptions import (
     InvalidInputException,
@@ -20,6 +20,8 @@ from moto.organizations.exceptions import (
     PolicyTypeNotEnabledException,
     TargetNotFoundException,
 )
+from moto.utilities.paginator import paginate
+from .utils import PAGINATION_MODEL
 
 
 class FakeOrganization(BaseModel):
@@ -103,6 +105,11 @@ class FakeAccount(BaseModel):
             "JoinedMethod": self.joined_method,
             "JoinedTimestamp": unix_time(self.create_time),
         }
+
+    def close(self):
+        # TODO: The CloseAccount spec allows the account to pass through a
+        # "PENDING_CLOSURE" state before reaching the SUSPNEDED state.
+        self.status = "SUSPENDED"
 
 
 class FakeOrganizationalUnit(BaseModel):
@@ -328,7 +335,8 @@ class FakeDelegatedAdministrator(BaseModel):
 
 
 class OrganizationsBackend(BaseBackend):
-    def __init__(self):
+    def __init__(self, region_name, account_id):
+        super().__init__(region_name, account_id)
         self._reset()
 
     def _reset(self):
@@ -427,21 +435,27 @@ class OrganizationsBackend(BaseBackend):
         ou = self.get_organizational_unit_by_id(kwargs["OrganizationalUnitId"])
         return ou.describe()
 
+    @paginate(pagination_model=PAGINATION_MODEL)
     def list_organizational_units_for_parent(self, **kwargs):
-        parent_id = self.validate_parent_id(kwargs["ParentId"])
-        return dict(
-            OrganizationalUnits=[
-                {"Id": ou.id, "Arn": ou.arn, "Name": ou.name}
-                for ou in self.ou
-                if ou.parent_id == parent_id
-            ]
-        )
+        parent_id = self.validate_parent_id(kwargs["parent_id"])
+        return [
+            {"Id": ou.id, "Arn": ou.arn, "Name": ou.name}
+            for ou in self.ou
+            if ou.parent_id == parent_id
+        ]
 
     def create_account(self, **kwargs):
         new_account = FakeAccount(self.org, **kwargs)
         self.accounts.append(new_account)
         self.attach_policy(PolicyId=utils.DEFAULT_POLICY_ID, TargetId=new_account.id)
         return new_account.create_account_status
+
+    def close_account(self, **kwargs):
+        for account in self.accounts:
+            if account.id == kwargs["AccountId"]:
+                account.close()
+                return
+        raise AccountNotFoundException
 
     def get_account_by_id(self, account_id):
         account = next(
@@ -495,18 +509,22 @@ class OrganizationsBackend(BaseBackend):
             next_token = str(len(accounts_resp))
         return dict(CreateAccountStatuses=accounts_resp, NextToken=next_token)
 
+    @paginate(pagination_model=PAGINATION_MODEL)
     def list_accounts(self):
-        return dict(Accounts=[account.describe() for account in self.accounts])
+        accounts = [account.describe() for account in self.accounts]
+        accounts = sorted(accounts, key=lambda x: x["JoinedTimestamp"])
+        return accounts
 
+    @paginate(pagination_model=PAGINATION_MODEL)
     def list_accounts_for_parent(self, **kwargs):
-        parent_id = self.validate_parent_id(kwargs["ParentId"])
-        return dict(
-            Accounts=[
-                account.describe()
-                for account in self.accounts
-                if account.parent_id == parent_id
-            ]
-        )
+        parent_id = self.validate_parent_id(kwargs["parent_id"])
+        accounts = [
+            account.describe()
+            for account in self.accounts
+            if account.parent_id == parent_id
+        ]
+        accounts = sorted(accounts, key=lambda x: x["JoinedTimestamp"])
+        return accounts
 
     def move_account(self, **kwargs):
         new_parent_id = self.validate_parent_id(kwargs["DestinationParentId"])
@@ -757,7 +775,7 @@ class OrganizationsBackend(BaseBackend):
     def register_delegated_administrator(self, **kwargs):
         account_id = kwargs["AccountId"]
 
-        if account_id == ACCOUNT_ID:
+        if account_id == get_account_id():
             raise ConstraintViolationException(
                 "You cannot register master account/yourself as delegated administrator for your organization."
             )
@@ -816,7 +834,7 @@ class OrganizationsBackend(BaseBackend):
         account_id = kwargs["AccountId"]
         service = kwargs["ServicePrincipal"]
 
-        if account_id == ACCOUNT_ID:
+        if account_id == get_account_id():
             raise ConstraintViolationException(
                 "You cannot register master account/yourself as delegated administrator for your organization."
             )
@@ -896,4 +914,10 @@ class OrganizationsBackend(BaseBackend):
         self.accounts.remove(account)
 
 
-organizations_backend = OrganizationsBackend()
+organizations_backends = BackendDict(
+    OrganizationsBackend,
+    "organizations",
+    use_boto3_regions=False,
+    additional_regions=["global"],
+)
+organizations_backend = organizations_backends["global"]

@@ -23,6 +23,18 @@ def test_verify_email_identity():
 
 
 @mock_ses
+def test_verify_email_identity_idempotency():
+    conn = boto3.client("ses", region_name="us-east-1")
+    address = "test@example.com"
+    conn.verify_email_identity(EmailAddress=address)
+    conn.verify_email_identity(EmailAddress=address)
+
+    identities = conn.list_identities()
+    address_list = identities["Identities"]
+    address_list.should.equal([address])
+
+
+@mock_ses
 def test_verify_email_address():
     conn = boto3.client("ses", region_name="us-east-1")
     conn.verify_email_address(EmailAddress="test@example.com")
@@ -120,7 +132,7 @@ def test_send_unverified_email_with_chevrons():
     # Sending an email to an unverified source should fail
     with pytest.raises(ClientError) as ex:
         conn.send_email(
-            Source=f"John Smith <foobar@example.com>",  # << Unverified source address
+            Source="John Smith <foobar@example.com>",  # << Unverified source address
             Destination={
                 "ToAddresses": ["blah@example.com"],
                 "CcAddresses": [],
@@ -1331,3 +1343,23 @@ def test_get_identity_mail_from_domain_attributes():
     attributes["MailFromDomainAttributes"].should.have.length_of(2)
     attributes["MailFromDomainAttributes"]["bar@foo.com"].should.have.length_of(1)
     attributes["MailFromDomainAttributes"]["lorem.com"].should.have.length_of(1)
+
+
+@mock_ses
+def test_get_identity_verification_attributes():
+    conn = boto3.client("ses", region_name="eu-central-1")
+
+    conn.verify_email_identity(EmailAddress="foo@bar.com")
+    conn.verify_domain_identity(Domain="foo.com")
+
+    attributes = conn.get_identity_verification_attributes(
+        Identities=["foo.com", "foo@bar.com", "bar@bar.com"]
+    )
+
+    attributes["VerificationAttributes"].should.have.length_of(2)
+    attributes["VerificationAttributes"]["foo.com"]["VerificationStatus"].should.equal(
+        "Success"
+    )
+    attributes["VerificationAttributes"]["foo@bar.com"][
+        "VerificationStatus"
+    ].should.equal("Success")

@@ -4,7 +4,6 @@ from moto.core.responses import BaseResponse
 from moto.ec2.models import ec2_backends
 from .models import rds_backends
 from .exceptions import DBParameterGroupNotFoundError
-from .utils import filters_from_querystring
 
 
 class RDSResponse(BaseResponse):
@@ -20,6 +19,7 @@ class RDSResponse(BaseResponse):
             "backup_retention_period": self._get_param("BackupRetentionPeriod"),
             "copy_tags_to_snapshot": self._get_param("CopyTagsToSnapshot"),
             "db_instance_class": self._get_param("DBInstanceClass"),
+            "db_cluster_identifier": self._get_param("DBClusterIdentifier"),
             "db_instance_identifier": self._get_param("DBInstanceIdentifier"),
             "db_name": self._get_param("DBName"),
             "db_parameter_group_name": self._get_param("DBParameterGroupName"),
@@ -27,6 +27,9 @@ class RDSResponse(BaseResponse):
             "db_subnet_group_name": self._get_param("DBSubnetGroupName"),
             "engine": self._get_param("Engine"),
             "engine_version": self._get_param("EngineVersion"),
+            "enable_cloudwatch_logs_exports": self._get_params().get(
+                "EnableCloudwatchLogsExports"
+            ),
             "enable_iam_database_authentication": self._get_bool_param(
                 "EnableIAMDatabaseAuthentication"
             ),
@@ -91,6 +94,9 @@ class RDSResponse(BaseResponse):
         return {
             "availability_zones": self._get_multi_param(
                 "AvailabilityZones.AvailabilityZone"
+            ),
+            "enable_cloudwatch_logs_exports": self._get_params().get(
+                "EnableCloudwatchLogsExports"
             ),
             "db_name": self._get_param("DatabaseName"),
             "db_cluster_identifier": self._get_param("DBClusterIdentifier"),
@@ -158,7 +164,7 @@ class RDSResponse(BaseResponse):
 
     def create_db_instance(self):
         db_kwargs = self._get_db_kwargs()
-        database = self.backend.create_database(db_kwargs)
+        database = self.backend.create_db_instance(db_kwargs)
         template = self.response_template(CREATE_DATABASE_TEMPLATE)
         return template.render(database=database)
 
@@ -171,9 +177,10 @@ class RDSResponse(BaseResponse):
 
     def describe_db_instances(self):
         db_instance_identifier = self._get_param("DBInstanceIdentifier")
-        filters = filters_from_querystring(self.querystring)
+        filters = self._get_multi_param("Filters.Filter.")
+        filters = {f["Name"]: f["Values"] for f in filters}
         all_instances = list(
-            self.backend.describe_databases(db_instance_identifier, filters=filters)
+            self.backend.describe_db_instances(db_instance_identifier, filters=filters)
         )
         marker = self._get_param("Marker")
         all_ids = [instance.db_instance_identifier for instance in all_instances]
@@ -195,17 +202,19 @@ class RDSResponse(BaseResponse):
     def modify_db_instance(self):
         db_instance_identifier = self._get_param("DBInstanceIdentifier")
         db_kwargs = self._get_db_kwargs()
+        # NOTE modify_db_instance does not support tags
+        del db_kwargs["tags"]
         new_db_instance_identifier = self._get_param("NewDBInstanceIdentifier")
         if new_db_instance_identifier:
             db_kwargs["new_db_instance_identifier"] = new_db_instance_identifier
-        database = self.backend.modify_database(db_instance_identifier, db_kwargs)
+        database = self.backend.modify_db_instance(db_instance_identifier, db_kwargs)
         template = self.response_template(MODIFY_DATABASE_TEMPLATE)
         return template.render(database=database)
 
     def delete_db_instance(self):
         db_instance_identifier = self._get_param("DBInstanceIdentifier")
         db_snapshot_name = self._get_param("FinalDBSnapshotIdentifier")
-        database = self.backend.delete_database(
+        database = self.backend.delete_db_instance(
             db_instance_identifier, db_snapshot_name
         )
         template = self.response_template(DELETE_DATABASE_TEMPLATE)
@@ -221,7 +230,7 @@ class RDSResponse(BaseResponse):
         db_instance_identifier = self._get_param("DBInstanceIdentifier")
         db_snapshot_identifier = self._get_param("DBSnapshotIdentifier")
         tags = self.unpack_complex_list_params("Tags.Tag", ("Key", "Value"))
-        snapshot = self.backend.create_database_snapshot(
+        snapshot = self.backend.create_db_snapshot(
             db_instance_identifier, db_snapshot_identifier, tags
         )
         template = self.response_template(CREATE_SNAPSHOT_TEMPLATE)
@@ -240,7 +249,8 @@ class RDSResponse(BaseResponse):
     def describe_db_snapshots(self):
         db_instance_identifier = self._get_param("DBInstanceIdentifier")
         db_snapshot_identifier = self._get_param("DBSnapshotIdentifier")
-        filters = filters_from_querystring(self.querystring)
+        filters = self._get_multi_param("Filters.Filter.")
+        filters = {f["Name"]: f["Values"] for f in filters}
         snapshots = self.backend.describe_database_snapshots(
             db_instance_identifier, db_snapshot_identifier, filters
         )
@@ -249,7 +259,7 @@ class RDSResponse(BaseResponse):
 
     def delete_db_snapshot(self):
         db_snapshot_identifier = self._get_param("DBSnapshotIdentifier")
-        snapshot = self.backend.delete_database_snapshot(db_snapshot_identifier)
+        snapshot = self.backend.delete_db_snapshot(db_snapshot_identifier)
         template = self.response_template(DELETE_SNAPSHOT_TEMPLATE)
         return template.render(snapshot=snapshot)
 
@@ -285,7 +295,7 @@ class RDSResponse(BaseResponse):
     def stop_db_instance(self):
         db_instance_identifier = self._get_param("DBInstanceIdentifier")
         db_snapshot_identifier = self._get_param("DBSnapshotIdentifier")
-        database = self.backend.stop_database(
+        database = self.backend.stop_db_instance(
             db_instance_identifier, db_snapshot_identifier
         )
         template = self.response_template(STOP_DATABASE_TEMPLATE)
@@ -293,7 +303,7 @@ class RDSResponse(BaseResponse):
 
     def start_db_instance(self):
         db_instance_identifier = self._get_param("DBInstanceIdentifier")
-        database = self.backend.start_database(db_instance_identifier)
+        database = self.backend.start_db_instance(db_instance_identifier)
         template = self.response_template(START_DATABASE_TEMPLATE)
         return template.render(database=database)
 
@@ -301,7 +311,7 @@ class RDSResponse(BaseResponse):
         group_name = self._get_param("DBSecurityGroupName")
         description = self._get_param("DBSecurityGroupDescription")
         tags = self.unpack_complex_list_params("Tags.Tag", ("Key", "Value"))
-        security_group = self.backend.create_security_group(
+        security_group = self.backend.create_db_security_group(
             group_name, description, tags
         )
         template = self.response_template(CREATE_SECURITY_GROUP_TEMPLATE)
@@ -506,7 +516,10 @@ class RDSResponse(BaseResponse):
 
     def delete_db_cluster(self):
         _id = self._get_param("DBClusterIdentifier")
-        cluster = self.backend.delete_db_cluster(cluster_identifier=_id)
+        snapshot_name = self._get_param("FinalDBSnapshotIdentifier")
+        cluster = self.backend.delete_db_cluster(
+            cluster_identifier=_id, snapshot_name=snapshot_name
+        )
         template = self.response_template(DELETE_CLUSTER_TEMPLATE)
         return template.render(cluster=cluster)
 
@@ -549,7 +562,8 @@ class RDSResponse(BaseResponse):
     def describe_db_cluster_snapshots(self):
         db_cluster_identifier = self._get_param("DBClusterIdentifier")
         db_snapshot_identifier = self._get_param("DBClusterSnapshotIdentifier")
-        filters = filters_from_querystring(self.querystring)
+        filters = self._get_multi_param("Filters.Filter.")
+        filters = {f["Name"]: f["Values"] for f in filters}
         snapshots = self.backend.describe_db_cluster_snapshots(
             db_cluster_identifier, db_snapshot_identifier, filters
         )

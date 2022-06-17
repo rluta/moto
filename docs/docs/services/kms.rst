@@ -29,7 +29,7 @@ kms
 - [ ] connect_custom_key_store
 - [ ] create_alias
 - [ ] create_custom_key_store
-- [ ] create_grant
+- [X] create_grant
 - [X] create_key
 - [X] decrypt
 - [X] delete_alias
@@ -49,6 +49,7 @@ kms
 - [ ] generate_data_key_pair
 - [ ] generate_data_key_pair_without_plaintext
 - [ ] generate_data_key_without_plaintext
+- [ ] generate_mac
 - [ ] generate_random
 - [X] get_key_policy
 - [X] get_key_rotation_status
@@ -56,16 +57,16 @@ kms
 - [ ] get_public_key
 - [ ] import_key_material
 - [ ] list_aliases
-- [ ] list_grants
+- [X] list_grants
 - [ ] list_key_policies
 - [X] list_keys
 - [X] list_resource_tags
-- [ ] list_retirable_grants
+- [X] list_retirable_grants
 - [X] put_key_policy
 - [X] re_encrypt
 - [ ] replicate_key
-- [ ] retire_grant
-- [ ] revoke_grant
+- [X] retire_grant
+- [X] revoke_grant
 - [X] schedule_key_deletion
 - [ ] sign
 - [X] tag_resource
@@ -75,4 +76,5 @@ kms
 - [X] update_key_description
 - [ ] update_primary_region
 - [ ] verify
+- [ ] verify_mac
 

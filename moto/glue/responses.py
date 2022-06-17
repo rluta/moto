@@ -129,13 +129,12 @@ class GlueResponse(BaseResponse):
     def get_partitions(self):
         database_name = self.parameters.get("DatabaseName")
         table_name = self.parameters.get("TableName")
-        if "Expression" in self.parameters:
-            raise NotImplementedError(
-                "Expression filtering in get_partitions is not implemented in moto"
-            )
+        expression = self.parameters.get("Expression")
         table = self.glue_backend.get_table(database_name, table_name)
 
-        return json.dumps({"Partitions": [p.as_dict() for p in table.get_partitions()]})
+        return json.dumps(
+            {"Partitions": [p.as_dict() for p in table.get_partitions(expression)]}
+        )
 
     def get_partition(self):
         database_name = self.parameters.get("DatabaseName")
@@ -308,6 +307,30 @@ class GlueResponse(BaseResponse):
         crawlers = self.glue_backend.get_crawlers()
         return json.dumps({"Crawlers": [crawler.as_dict() for crawler in crawlers]})
 
+    def list_crawlers(self):
+        next_token = self._get_param("NextToken")
+        max_results = self._get_int_param("MaxResults")
+        tags = self._get_param("Tags")
+        crawlers, next_token = self.glue_backend.list_crawlers(
+            next_token=next_token, max_results=max_results
+        )
+        filtered_crawler_names = self.filter_crawlers_by_tags(crawlers, tags)
+        return json.dumps(
+            dict(
+                CrawlerNames=[crawler_name for crawler_name in filtered_crawler_names],
+                NextToken=next_token,
+            )
+        )
+
+    def filter_crawlers_by_tags(self, crawlers, tags):
+        if not tags:
+            return [crawler.get_name() for crawler in crawlers]
+        return [
+            crawler.get_name()
+            for crawler in crawlers
+            if self.is_tags_match(self, crawler.arn, tags)
+        ]
+
     def start_crawler(self):
         name = self.parameters.get("Name")
         self.glue_backend.start_crawler(name)
@@ -366,6 +389,22 @@ class GlueResponse(BaseResponse):
         )
         return json.dumps(dict(Name=name))
 
+    def get_job(self):
+        name = self.parameters.get("JobName")
+        job = self.glue_backend.get_job(name)
+        return json.dumps({"Job": job.as_dict()})
+
+    def start_job_run(self):
+        name = self.parameters.get("JobName")
+        job_run_id = self.glue_backend.start_job_run(name)
+        return json.dumps(dict(JobRunId=job_run_id))
+
+    def get_job_run(self):
+        name = self.parameters.get("JobName")
+        run_id = self.parameters.get("RunId")
+        job_run = self.glue_backend.get_job_run(name, run_id)
+        return json.dumps({"JobRun": job_run.as_dict()})
+
     def list_jobs(self):
         next_token = self._get_param("NextToken")
         max_results = self._get_int_param("MaxResults")
@@ -381,15 +420,35 @@ class GlueResponse(BaseResponse):
             )
         )
 
+    def get_tags(self):
+        resource_arn = self.parameters.get("ResourceArn")
+        tags = self.glue_backend.get_tags(resource_arn)
+        return 200, {}, json.dumps({"Tags": tags})
+
+    def tag_resource(self):
+        resource_arn = self.parameters.get("ResourceArn")
+        tags = self.parameters.get("TagsToAdd", {})
+        self.glue_backend.tag_resource(resource_arn, tags)
+        return 201, {}, "{}"
+
+    def untag_resource(self):
+        resource_arn = self._get_param("ResourceArn")
+        tag_keys = self.parameters.get("TagsToRemove")
+        self.glue_backend.untag_resource(resource_arn, tag_keys)
+        return 200, {}, "{}"
+
     def filter_jobs_by_tags(self, jobs, tags):
         if not tags:
             return [job.get_name() for job in jobs]
-        return [job.get_name() for job in jobs if self.is_tags_match(job.tags, tags)]
+        return [
+            job.get_name() for job in jobs if self.is_tags_match(self, job.arn, tags)
+        ]
 
     @staticmethod
-    def is_tags_match(job_tags, tags):
-        mutual_keys = set(job_tags).intersection(tags)
+    def is_tags_match(self, resource_arn, tags):
+        glue_resource_tags = self.glue_backend.get_tags(resource_arn)
+        mutual_keys = set(glue_resource_tags).intersection(tags)
         for key in mutual_keys:
-            if job_tags[key] == tags[key]:
+            if glue_resource_tags[key] == tags[key]:
                 return True
         return False

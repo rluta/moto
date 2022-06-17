@@ -62,7 +62,6 @@ def test_create_key():
         KeyUsage="ENCRYPT_DECRYPT",
         Tags=[{"TagKey": "project", "TagValue": "moto"}],
     )
-    print(key["KeyMetadata"])
 
     key["KeyMetadata"]["Arn"].should.equal(
         "arn:aws:kms:us-east-1:{}:key/{}".format(
@@ -73,9 +72,9 @@ def test_create_key():
     key["KeyMetadata"]["CreationDate"].should.be.a(datetime)
     key["KeyMetadata"]["CustomerMasterKeySpec"].should.equal("SYMMETRIC_DEFAULT")
     key["KeyMetadata"]["Description"].should.equal("my key")
-    key["KeyMetadata"]["Enabled"].should.be.ok
+    key["KeyMetadata"]["Enabled"].should.equal(True)
     key["KeyMetadata"]["EncryptionAlgorithms"].should.equal(["SYMMETRIC_DEFAULT"])
-    key["KeyMetadata"]["KeyId"].should_not.be.empty
+    key["KeyMetadata"]["KeyId"].should.match("[-a-zA-Z0-9]+")
     key["KeyMetadata"]["KeyManager"].should.equal("CUSTOMER")
     key["KeyMetadata"]["KeyState"].should.equal("Enabled")
     key["KeyMetadata"]["KeyUsage"].should.equal("ENCRYPT_DECRYPT")
@@ -134,9 +133,9 @@ def test_describe_key(id_or_arn):
     response["KeyMetadata"]["CreationDate"].should.be.a(datetime)
     response["KeyMetadata"]["CustomerMasterKeySpec"].should.equal("SYMMETRIC_DEFAULT")
     response["KeyMetadata"]["Description"].should.equal("my key")
-    response["KeyMetadata"]["Enabled"].should.be.ok
+    response["KeyMetadata"]["Enabled"].should.equal(True)
     response["KeyMetadata"]["EncryptionAlgorithms"].should.equal(["SYMMETRIC_DEFAULT"])
-    response["KeyMetadata"]["KeyId"].should_not.be.empty
+    response["KeyMetadata"]["KeyId"].should.match("[-a-zA-Z0-9]+")
     response["KeyMetadata"]["KeyManager"].should.equal("CUSTOMER")
     response["KeyMetadata"]["KeyState"].should.equal("Enabled")
     response["KeyMetadata"]["KeyUsage"].should.equal("ENCRYPT_DECRYPT")
@@ -648,7 +647,10 @@ def test_generate_data_key_all_valid_key_ids(prefix, append_key_id):
     if append_key_id:
         target_id += key_id
 
-    client.generate_data_key(KeyId=key_id, NumberOfBytes=32)
+    resp = client.generate_data_key(KeyId=target_id, NumberOfBytes=32)
+    resp.should.have.key("KeyId").equals(
+        f"arn:aws:kms:us-east-1:123456789012:key/{key_id}"
+    )
 
 
 @mock_kms
@@ -1041,8 +1043,8 @@ def test__delete_alias__raises_if_alias_is_not_found():
     )
 
 
-def sort(l):
-    return sorted(l, key=lambda d: d.keys())
+def sort(lst):
+    return sorted(lst, key=lambda d: d.keys())
 
 
 def _check_tags(key_id, created_tags, client):

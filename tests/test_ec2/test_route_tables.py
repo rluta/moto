@@ -10,7 +10,7 @@ from uuid import uuid4
 
 
 @mock_ec2
-def test_route_tables_defaults_boto3():
+def test_route_tables_defaults():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
     vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
@@ -40,7 +40,7 @@ def test_route_tables_defaults_boto3():
 
 
 @mock_ec2
-def test_route_tables_additional_boto3():
+def test_route_tables_additional():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
     vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
@@ -85,7 +85,7 @@ def test_route_tables_additional_boto3():
 
 
 @mock_ec2
-def test_route_tables_filters_standard_boto3():
+def test_route_tables_filters_standard():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
 
@@ -94,6 +94,8 @@ def test_route_tables_filters_standard_boto3():
 
     vpc2 = ec2.create_vpc(CidrBlock="10.0.0.0/16")
     route_table2 = ec2.create_route_table(VpcId=vpc2.id)
+    igw = ec2.create_internet_gateway()
+    route_table2.create_route(DestinationCidrBlock="10.0.0.4/24", GatewayId=igw.id)
 
     all_route_tables = client.describe_route_tables()["RouteTables"]
     all_ids = [rt["RouteTableId"] for rt in all_route_tables]
@@ -135,6 +137,16 @@ def test_route_tables_filters_standard_boto3():
     vpc2_main_route_table_ids.should_not.contain(route_table1.id)
     vpc2_main_route_table_ids.should_not.contain(route_table2.id)
 
+    # Filter by route gateway id
+    resp = client.describe_route_tables(
+        Filters=[
+            {"Name": "route.gateway-id", "Values": [igw.id]},
+        ]
+    )["RouteTables"]
+    assert any(
+        [route["GatewayId"] == igw.id for table in resp for route in table["Routes"]]
+    )
+
     # Unsupported filter
     if not settings.TEST_SERVER_MODE:
         # ServerMode will just throw a generic 500
@@ -145,7 +157,7 @@ def test_route_tables_filters_standard_boto3():
 
 
 @mock_ec2
-def test_route_tables_filters_associations_boto3():
+def test_route_tables_filters_associations():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
 
@@ -193,7 +205,7 @@ def test_route_tables_filters_associations_boto3():
 
 
 @mock_ec2
-def test_route_table_associations_boto3():
+def test_route_table_associations():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
 
@@ -204,7 +216,6 @@ def test_route_table_associations_boto3():
     # Refresh
     r = client.describe_route_tables(RouteTableIds=[route_table.id])["RouteTables"][0]
     r["Associations"].should.have.length_of(1)
-    print(r)
 
     # Associate
     association_id = client.associate_route_table(
@@ -272,7 +283,7 @@ def test_route_table_associations_boto3():
 
 
 @mock_ec2
-def test_route_table_replace_route_table_association_boto3():
+def test_route_table_replace_route_table_association():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
 
@@ -366,7 +377,7 @@ def test_route_table_replace_route_table_association_boto3():
 
 
 @mock_ec2
-def test_route_table_get_by_tag_boto3():
+def test_route_table_get_by_tag():
     ec2 = boto3.resource("ec2", region_name="eu-central-1")
 
     vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
@@ -386,7 +397,7 @@ def test_route_table_get_by_tag_boto3():
 
 
 @mock_ec2
-def test_routes_additional_boto3():
+def test_routes_additional():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
     vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
@@ -411,7 +422,7 @@ def test_routes_additional_boto3():
 
     new_route = new_routes[0]
     new_route.gateway_id.should.equal(igw.id)
-    new_route.instance_id.should.be.none
+    new_route.instance_id.should.equal(None)
     new_route.state.should.equal("active")
     new_route.destination_cidr_block.should.equal(ROUTE_CIDR)
 
@@ -439,7 +450,7 @@ def test_routes_additional_boto3():
 
 
 @mock_ec2
-def test_routes_replace_boto3():
+def test_routes_replace():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
     vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
@@ -510,7 +521,57 @@ def test_routes_replace_boto3():
 
 
 @mock_ec2
-def test_routes_not_supported_boto3():
+def test_routes_already_exist():
+    client = boto3.client("ec2", region_name="us-east-1")
+    ec2 = boto3.resource("ec2", region_name="us-east-1")
+    vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
+
+    main_route_table_id = client.describe_route_tables(
+        Filters=[
+            {"Name": "vpc-id", "Values": [vpc.id]},
+            {"Name": "association.main", "Values": ["true"]},
+        ]
+    )["RouteTables"][0]["RouteTableId"]
+    main_route_table = ec2.RouteTable(main_route_table_id)
+    ROUTE_CIDR = "10.0.0.0/23"
+    ROUTE_SUB_CIDR = "10.0.0.0/24"
+    ROUTE_NO_CONFLICT_CIDR = "10.0.2.0/24"
+
+    # Various route targets
+    igw = ec2.create_internet_gateway()
+
+    # Create initial route
+    main_route_table.create_route(DestinationCidrBlock=ROUTE_CIDR, GatewayId=igw.id)
+    main_route_table.create_route(
+        DestinationCidrBlock=ROUTE_NO_CONFLICT_CIDR, GatewayId=igw.id
+    )
+
+    # Create
+    with pytest.raises(ClientError) as ex:
+        client.create_route(
+            RouteTableId=main_route_table.id,
+            DestinationCidrBlock=ROUTE_CIDR,
+            GatewayId=igw.id,
+        )
+
+    ex.value.response["ResponseMetadata"]["HTTPStatusCode"].should.equal(400)
+    ex.value.response["ResponseMetadata"].should.have.key("RequestId")
+    ex.value.response["Error"]["Code"].should.equal("RouteAlreadyExists")
+
+    with pytest.raises(ClientError) as ex:
+        client.create_route(
+            RouteTableId=main_route_table.id,
+            DestinationCidrBlock=ROUTE_SUB_CIDR,
+            GatewayId=igw.id,
+        )
+
+    ex.value.response["ResponseMetadata"]["HTTPStatusCode"].should.equal(400)
+    ex.value.response["ResponseMetadata"].should.have.key("RequestId")
+    ex.value.response["Error"]["Code"].should.equal("RouteAlreadyExists")
+
+
+@mock_ec2
+def test_routes_not_supported():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
     main_route_table_id = client.describe_route_tables()["RouteTables"][0][
@@ -551,7 +612,7 @@ def test_routes_not_supported_boto3():
 
 
 @mock_ec2
-def test_routes_vpc_peering_connection_boto3():
+def test_routes_vpc_peering_connection():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
     vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
@@ -581,15 +642,15 @@ def test_routes_vpc_peering_connection_boto3():
     new_routes.should.have.length_of(1)
 
     new_route = new_routes[0]
-    new_route.gateway_id.should.be.none
-    new_route.instance_id.should.be.none
+    new_route.gateway_id.should.equal(None)
+    new_route.instance_id.should.equal(None)
     new_route.vpc_peering_connection_id.should.equal(vpc_pcx.id)
     new_route.state.should.equal("active")
     new_route.destination_cidr_block.should.equal(ROUTE_CIDR)
 
 
 @mock_ec2
-def test_routes_vpn_gateway_boto3():
+def test_routes_vpn_gateway():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
     vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
@@ -617,12 +678,12 @@ def test_routes_vpn_gateway_boto3():
 
     new_route = new_routes[0]
     new_route.gateway_id.should.equal(vpn_gw_id)
-    new_route.instance_id.should.be.none
-    new_route.vpc_peering_connection_id.should.be.none
+    new_route.instance_id.should.equal(None)
+    new_route.vpc_peering_connection_id.should.equal(None)
 
 
 @mock_ec2
-def test_network_acl_tagging_boto3():
+def test_network_acl_tagging():
     client = boto3.client("ec2", region_name="us-east-1")
     ec2 = boto3.resource("ec2", region_name="us-east-1")
     vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
@@ -650,7 +711,7 @@ def test_create_route_with_invalid_destination_cidr_block_parameter():
 
     vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")
     vpc.reload()
-    vpc.is_default.shouldnt.be.ok
+    vpc.is_default.should.equal(False)
 
     route_table = ec2.create_route_table(VpcId=vpc.id)
     route_table.reload()
@@ -915,7 +976,6 @@ def test_associate_route_table_by_subnet():
             {"Name": "association.route-table-association-id", "Values": [assoc_id]}
         ]
     )["RouteTables"]
-    print(verify[0]["Associations"])
 
     # First assocation is the main
     verify[0]["Associations"][0].should.have.key("Main").equals(True)

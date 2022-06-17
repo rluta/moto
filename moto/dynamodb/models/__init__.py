@@ -7,7 +7,7 @@ import re
 import uuid
 
 from collections import OrderedDict
-from moto.core import ACCOUNT_ID
+from moto.core import get_account_id
 from moto.core import BaseBackend, BaseModel, CloudFormationModel
 from moto.core.utils import unix_time, unix_time_millis, BackendDict
 from moto.core.exceptions import JsonRESTError
@@ -25,6 +25,15 @@ from moto.dynamodb.exceptions import (
     InvalidAttributeTypeError,
     MultipleTransactionsException,
     TooManyTransactionsException,
+    TableNotFoundException,
+    ResourceNotFoundException,
+    SourceTableNotFoundException,
+    TableAlreadyExistsException,
+    BackupNotFoundException,
+    ResourceInUseException,
+    StreamAlreadyEnabledException,
+    MockValidationException,
+    InvalidConversion,
 )
 from moto.dynamodb.models.utilities import bytesize
 from moto.dynamodb.models.dynamo_type import DynamoType
@@ -554,7 +563,7 @@ class Table(CloudFormationModel):
         return table
 
     def _generate_arn(self, name):
-        return f"arn:aws:dynamodb:us-east-1:{ACCOUNT_ID}:table/{name}"
+        return f"arn:aws:dynamodb:us-east-1:{get_account_id()}:table/{name}"
 
     def set_stream_specification(self, streams):
         self.stream_specification = streams
@@ -638,6 +647,13 @@ class Table(CloudFormationModel):
                 if DynamoType(range_value).size() > RANGE_KEY_MAX_LENGTH:
                     raise RangeKeyTooLong
 
+    def _validate_item_types(self, item_attrs):
+        for key, value in item_attrs.items():
+            if type(value) == dict:
+                self._validate_item_types(value)
+            elif type(value) == int and key == "N":
+                raise InvalidConversion
+
     def put_item(
         self,
         item_attrs,
@@ -648,7 +664,7 @@ class Table(CloudFormationModel):
         overwrite=False,
     ):
         if self.hash_key_attr not in item_attrs.keys():
-            raise KeyError(
+            raise MockValidationException(
                 "One or more parameter values were invalid: Missing the key "
                 + self.hash_key_attr
                 + " in the item"
@@ -656,7 +672,7 @@ class Table(CloudFormationModel):
         hash_value = DynamoType(item_attrs.get(self.hash_key_attr))
         if self.has_range_key:
             if self.range_key_attr not in item_attrs.keys():
-                raise KeyError(
+                raise MockValidationException(
                     "One or more parameter values were invalid: Missing the key "
                     + self.range_key_attr
                     + " in the item"
@@ -679,6 +695,8 @@ class Table(CloudFormationModel):
             )
 
         self._validate_key_sizes(item_attrs)
+
+        self._validate_item_types(item_attrs)
 
         if expected is None:
             expected = {}
@@ -725,7 +743,7 @@ class Table(CloudFormationModel):
 
     def get_item(self, hash_key, range_key=None, projection_expression=None):
         if self.has_range_key and not range_key:
-            raise ValueError(
+            raise MockValidationException(
                 "Table has a range key, but no range key was passed into get_item"
             )
         try:
@@ -780,7 +798,7 @@ class Table(CloudFormationModel):
             all_indexes = self.all_indexes()
             indexes_by_name = dict((i.name, i) for i in all_indexes)
             if index_name not in indexes_by_name:
-                raise ValueError(
+                raise MockValidationException(
                     "Invalid index: %s for table: %s. Available indexes are: %s"
                     % (index_name, self.name, ", ".join(indexes_by_name.keys()))
                 )
@@ -791,7 +809,9 @@ class Table(CloudFormationModel):
                     key for key in index.schema if key["KeyType"] == "HASH"
                 ][0]
             except IndexError:
-                raise ValueError("Missing Hash Key. KeySchema: %s" % index.name)
+                raise MockValidationException(
+                    "Missing Hash Key. KeySchema: %s" % index.name
+                )
 
             try:
                 index_range_key = [
@@ -904,11 +924,13 @@ class Table(CloudFormationModel):
     def all_indexes(self):
         return (self.global_indexes or []) + (self.indexes or [])
 
-    def get_index(self, index_name, err=None):
+    def get_index(self, index_name, error_if_not=False):
         all_indexes = self.all_indexes()
         indexes_by_name = dict((i.name, i) for i in all_indexes)
-        if err and index_name not in indexes_by_name:
-            raise err
+        if error_if_not and index_name not in indexes_by_name:
+            raise InvalidIndexNameError(
+                "The table does not have the specified index: %s" % index_name
+            )
         return indexes_by_name[index_name]
 
     def has_idx_items(self, index_name):
@@ -938,10 +960,7 @@ class Table(CloudFormationModel):
         scanned_count = 0
 
         if index_name:
-            err = InvalidIndexNameError(
-                "The table does not have the specified index: %s" % index_name
-            )
-            self.get_index(index_name, err)
+            self.get_index(index_name, error_if_not=True)
             items = self.has_idx_items(index_name)
         else:
             items = self.all_items()
@@ -1110,7 +1129,7 @@ class Backup(object):
     def arn(self):
         return "arn:aws:dynamodb:{region}:{account}:table/{table_name}/backup/{identifier}".format(
             region=self.backend.region_name,
-            account=ACCOUNT_ID,
+            account=get_account_id(),
             table_name=self.table.name,
             identifier=self.identifier,
         )
@@ -1157,15 +1176,10 @@ class Backup(object):
 
 
 class DynamoDBBackend(BaseBackend):
-    def __init__(self, region_name=None):
-        self.region_name = region_name
+    def __init__(self, region_name, account_id):
+        super().__init__(region_name, account_id)
         self.tables = OrderedDict()
         self.backups = OrderedDict()
-
-    def reset(self):
-        region_name = self.region_name
-        self.__dict__ = {}
-        self.__init__(region_name)
 
     @staticmethod
     def default_vpc_endpoint_service(service_region, zones):
@@ -1182,12 +1196,14 @@ class DynamoDBBackend(BaseBackend):
 
     def create_table(self, name, **params):
         if name in self.tables:
-            return None
+            raise ResourceInUseException
         table = Table(name, region=self.region_name, **params)
         self.tables[name] = table
         return table
 
     def delete_table(self, name):
+        if name not in self.tables:
+            raise ResourceNotFoundException
         return self.tables.pop(name, None)
 
     def describe_endpoints(self):
@@ -1211,11 +1227,10 @@ class DynamoDBBackend(BaseBackend):
                 ]
 
     def list_tags_of_resource(self, table_arn):
-        required_table = None
         for table in self.tables:
             if self.tables[table].table_arn == table_arn:
-                required_table = self.tables[table]
-        return required_table.tags
+                return self.tables[table].tags
+        raise ResourceNotFoundException
 
     def list_tables(self, limit, exclusive_start_table_name):
         all_tables = list(self.tables.keys())
@@ -1240,7 +1255,7 @@ class DynamoDBBackend(BaseBackend):
         return tables, None
 
     def describe_table(self, name):
-        table = self.tables[name]
+        table = self.get_table(name)
         return table.describe(base_key="Table")
 
     def update_table(
@@ -1281,7 +1296,7 @@ class DynamoDBBackend(BaseBackend):
             stream_specification.get("StreamEnabled")
             or stream_specification.get("StreamViewType")
         ) and table.latest_stream_label:
-            raise ValueError("Table already has stream enabled")
+            raise StreamAlreadyEnabledException
         table.set_stream_specification(stream_specification)
         return table
 
@@ -1338,9 +1353,7 @@ class DynamoDBBackend(BaseBackend):
         expression_attribute_values=None,
         overwrite=False,
     ):
-        table = self.tables.get(table_name)
-        if not table:
-            return None
+        table = self.get_table(table_name)
         return table.put_item(
             item_attrs,
             expected,
@@ -1377,22 +1390,37 @@ class DynamoDBBackend(BaseBackend):
         if table.hash_key_attr not in keys or (
             table.has_range_key and table.range_key_attr not in keys
         ):
-            raise ValueError(
-                "Table has a range key, but no range key was passed into get_item"
-            )
+            # "Table has a range key, but no range key was passed into get_item"
+            raise MockValidationException("Validation Exception")
         hash_key = DynamoType(keys[table.hash_key_attr])
         range_key = (
             DynamoType(keys[table.range_key_attr]) if table.has_range_key else None
         )
         return hash_key, range_key
 
+    def get_schema(self, table_name, index_name):
+        table = self.get_table(table_name)
+        if index_name:
+            all_indexes = (table.global_indexes or []) + (table.indexes or [])
+            indexes_by_name = dict((i.name, i) for i in all_indexes)
+            if index_name not in indexes_by_name:
+                raise ResourceNotFoundException(
+                    "Invalid index: {} for table: {}. Available indexes are: {}".format(
+                        index_name, table_name, ", ".join(indexes_by_name.keys())
+                    )
+                )
+
+            return indexes_by_name[index_name].schema
+        else:
+            return table.schema
+
     def get_table(self, table_name):
+        if table_name not in self.tables:
+            raise ResourceNotFoundException()
         return self.tables.get(table_name)
 
     def get_item(self, table_name, keys, projection_expression=None):
         table = self.get_table(table_name)
-        if not table:
-            raise ValueError("No table found")
         hash_key, range_key = self.get_keys_value(table, keys)
         return table.get_item(hash_key, range_key, projection_expression)
 
@@ -1412,9 +1440,7 @@ class DynamoDBBackend(BaseBackend):
         filter_expression=None,
         **filter_kwargs,
     ):
-        table = self.tables.get(table_name)
-        if not table:
-            return None, None
+        table = self.get_table(table_name)
 
         hash_key = DynamoType(hash_key_dict)
         range_values = [DynamoType(range_value) for range_value in range_value_dicts]
@@ -1448,9 +1474,7 @@ class DynamoDBBackend(BaseBackend):
         index_name,
         projection_expression,
     ):
-        table = self.tables.get(table_name)
-        if not table:
-            return None, None, None
+        table = self.get_table(table_name)
 
         scan_filters = {}
         for key, (comparison_operator, comparison_values) in filters.items():
@@ -1582,8 +1606,6 @@ class DynamoDBBackend(BaseBackend):
         condition_expression=None,
     ):
         table = self.get_table(table_name)
-        if not table:
-            return None
 
         hash_value, range_value = self.get_keys_value(table, key)
         item = table.get_item(hash_value, range_value)
@@ -1719,25 +1741,31 @@ class DynamoDBBackend(BaseBackend):
                     )
                 else:
                     raise ValueError
-                errors.append(None)
+                errors.append((None, None))
             except MultipleTransactionsException:
                 # Rollback to the original state, and reraise the error
                 self.tables = original_table_state
                 raise MultipleTransactionsException()
             except Exception as e:  # noqa: E722 Do not use bare except
-                errors.append(type(e).__name__)
-        if any(errors):
+                errors.append((type(e).__name__, e.message))
+        if set(errors) != set([(None, None)]):
             # Rollback to the original state, and reraise the errors
             self.tables = original_table_state
             raise TransactionCanceledException(errors)
 
     def describe_continuous_backups(self, table_name):
-        table = self.get_table(table_name)
+        try:
+            table = self.get_table(table_name)
+        except ResourceNotFoundException:
+            raise TableNotFoundException(table_name)
 
         return table.continuous_backups
 
     def update_continuous_backups(self, table_name, point_in_time_spec):
-        table = self.get_table(table_name)
+        try:
+            table = self.get_table(table_name)
+        except ResourceNotFoundException:
+            raise TableNotFoundException(table_name)
 
         if (
             point_in_time_spec["PointInTimeRecoveryEnabled"]
@@ -1759,6 +1787,8 @@ class DynamoDBBackend(BaseBackend):
         return table.continuous_backups
 
     def get_backup(self, backup_arn):
+        if backup_arn not in self.backups:
+            raise BackupNotFoundException(backup_arn)
         return self.backups.get(backup_arn)
 
     def list_backups(self, table_name):
@@ -1768,9 +1798,10 @@ class DynamoDBBackend(BaseBackend):
         return backups
 
     def create_backup(self, table_name, backup_name):
-        table = self.get_table(table_name)
-        if table is None:
-            raise KeyError()
+        try:
+            table = self.get_table(table_name)
+        except ResourceNotFoundException:
+            raise TableNotFoundException(table_name)
         backup = Backup(self, backup_name, table)
         self.backups[backup.arn] = backup
         return backup
@@ -1791,11 +1822,8 @@ class DynamoDBBackend(BaseBackend):
 
     def restore_table_from_backup(self, target_table_name, backup_arn):
         backup = self.get_backup(backup_arn)
-        if backup is None:
-            raise KeyError()
-        existing_table = self.get_table(target_table_name)
-        if existing_table is not None:
-            raise ValueError()
+        if target_table_name in self.tables:
+            raise TableAlreadyExistsException(target_table_name)
         new_table = RestoredTable(
             target_table_name, region=self.region_name, backup=backup
         )
@@ -1808,12 +1836,12 @@ class DynamoDBBackend(BaseBackend):
         copy all items from the source without respect to other arguments.
         """
 
-        source = self.get_table(source_table_name)
-        if source is None:
-            raise KeyError()
-        existing_table = self.get_table(target_table_name)
-        if existing_table is not None:
-            raise ValueError()
+        try:
+            source = self.get_table(source_table_name)
+        except ResourceNotFoundException:
+            raise SourceTableNotFoundException(source_table_name)
+        if target_table_name in self.tables:
+            raise TableAlreadyExistsException(target_table_name)
         new_table = RestoredPITTable(
             target_table_name, region=self.region_name, source=source
         )

@@ -1,6 +1,366 @@
 Moto Changelog
 ==============
 
+3.1.13
+-----
+Docker Digest for 3.1.13: _sha256:d7f6c779c79f03b686747ae26b52bdca26fd81a50c6a41a8a6cba50c96982abf_
+
+    New Methods:
+        * EC2:
+            * create_default_vpc()
+
+        * Greengrass:
+            * create_device_definition()
+            * create_device_definition_version()
+            * delete_core_definition()
+            * delete_device_definition()
+            * get_core_definition()
+            * get_core_definition_version()
+            * get_device_definition()
+            * get_device_definition_version()
+            * list_core_definitions()
+            * list_core_definition_versions()
+            * list_device_definitions()
+            * list_device_definition_versions()
+            * update_core_definition()
+            * update_device_definition()
+
+        * SSO Admin:
+            * create_permission_set()
+            * delete_permission_set()
+            * describe_permission_set()
+            * list_permission_sets()
+            * update_permission_set()
+
+        * Route53:
+            * get_dnssec()
+            * get_health_check()
+
+    * Miscellaneous:
+        * StateManager now supports `s3::keyrestore`, managing how long it takes to restore S3 objects from Glacier.
+
+
+3.1.12
+-----
+Docker Digest for 3.1.12: _sha256:64dcfb63b252b3413481683b90f105d01644b6bec150b60e6f612a2569ee630c_
+
+    New Services:
+        * Greengrass:
+            * create_core_definition()
+            * create_core_definition_version()
+
+    Internal Changes:
+        * The data structure containing all of Moto's state has been updated to support multiple accounts
+
+
+3.1.11
+-----
+Docker Digest for 3.1.11: _sha256:bb359c5e57e38534eb8e934757354277fff30598ca305d0f18f68ddfe4ce6359_
+
+    New Methods:
+        * GuardDuty:
+            * create_filter()
+            * delete_detector()
+            * delete_filter()
+            * enable_organization_admin_account()
+            * get_detector()
+            * get_filter()
+            * list_organization_admin_accounts()
+            * update_detector()
+            * update_filter()
+        * KMS:
+            * create_grant()
+            * list_grants()
+            * list_retirable_grants()
+            * retire_grant()
+            * revoke_grant()
+
+    Miscellaneous:
+        * EC2:describe_network_acls() now supports the `entry.egress`-filter
+        * EC2:run_instances() now supports validation for the KeyPair-parameter. This is disabled by default - set MOTO_ENABLE_KEYPAIR_VALIDATION to true to enable this.
+        * EC2:run_instances() now supports validation for the ImageId-parameter. This is disabled by default - set MOTO_ENABLE_AMI_VALIDATION to true to enable this.
+
+
+3.1.10
+-----
+Docker Digest for 3.1.10: _sha256:18c6367dbb843850a5b52bc2b74cde9fd2a03719da667aa01b7c80de26849fb6_
+
+    New Methods:
+        * APIGateway:
+            * import_rest_api()
+            * put_rest_api()
+        * Glue:
+            * get_tags()
+            * tag_resource()
+            * untag_resource()
+
+    Miscellaneous:
+        * APIGateway:put_integration() now supports the passthroughBehavior-parameter
+        * APIGatewayV2:create_authorizer() now supports the AuthorizerPayloadFormatVersion-parameter
+        * AWSLamba:publish_layer_version() now supports the CompatibleArchitectures-parameter
+        * DAX:create_cluster() now supports the ClusterEndpointEncryptionType-parameter
+        * EC2:describe_route_tables() now supports the filter `route.gateway-id`
+        * EC2:run_instances() now validates whether the Placement-parameter has a valid availabilty zone
+        * ECS:list_services() now supports the launchType-parameter
+        * ELB:describe_instance_health() now returns the OutOfService-status when appropriate
+        * Organizations:list_accounts_for_parent() now supports pagination
+        * Organizations:list_organizational_units_for_parent() now supports pagination
+
+
+3.1.9
+-----
+Docker Digest for 3.1.9: _sha256:eea31d2f99b2fef16cffb3ea86d21dd911647835a3182bedd8918074292ce552_
+
+    New Services:
+        * EBS:
+            * complete_snapshot()
+            * get_snapshot_block()
+            * list_changed_blocks()
+            * list_snapshot_blocks()
+            * put_snapshot_block()
+            * start_snapshot()
+
+    New Methods:
+        * CloudFront:
+            * update_distribution()
+        * Datasets:
+            * create_dataset()
+            * delete_dataset()
+            * describe_dataset()
+            * list_datasets()
+            * update_dataset()
+        * Glue:
+            * list_crawlers()
+        * Rekognition:
+            * get_face_search()
+            * start_face_seach()
+
+    Miscellaneous:
+        * EC2:describe_vpc_endpoints() now supports the `vpc-endpoint-type`-filter
+        * RDS:create_db_cluster() now supports the EnableCloudwatchLogsExports-parameter
+        * RDS:create_db_instance() now supports the EnableCloudwatchLogsExports-parameter
+        * SSM now integrates with SecretsManager
+
+3.1.8
+-----
+Docker Digest for 3.1.8: _sha256:a7d8c55eec8d75d75dd2532a6a0a9647935238236a54e4de7bb3f72bc28b7bf8_
+
+    General:
+        * Moto now supports a way to delay state transitions. 
+          See http://docs.getmoto.org/en/latest/docs/configuration/state_transition/index.html
+        * Moto now supports `@mock_batch_simple`, a way to mock the Batch-service without invoking Docker.
+
+    New Methods:
+        * CognitoIDP:
+            * global_sign_out()
+            * update_group()
+            * update_user_attributes()
+        * DataBrew:
+            * delete_recipe_version()
+            * list_recipe_versions()
+            * publish_recipe()
+        * IAM:
+            * create_service_linked_role()
+            * delete_service_linked_role()
+            * get_service_linked_role_deletion_status()
+        * Sagemaker:
+            * update_endpoint_weights_and_capacities()
+
+    Miscellaneous:
+        * EC2: request_spot_fleet() now supports the parameters LaunchTemplateConfigs, InstanceInterruptionBehavior
+        * EC2: request_spot_instances() now supports the InstanceInterruptionBehavior-parameter
+        * EC2: The status of a SpotInstances request now automatically transitions to 'Active/Fulfilled'
+        * EC2: Tags specified into create_launch_template() are now passed through when calling `run_instances()` with this template
+        * RDS: describe_db_instances() now supports the filter `db-cluster-id`
+        * TimestreamWrite: create_table() now supports the MagneticStoreWriteProps-parameter
+        * TimestreamWrite: update_table() now supports the MagneticStoreWriteProps-parameter 
+
+
+3.1.7
+-----
+Docker Digest for 3.1.7: _sha256:d9661c13c2f790cbe9ed6531cefec132494fc0e8c37fcceca1f709292ef0880f_
+
+    New Methods:
+        * SES:
+            * get_identity_verification_attributes()
+
+    Miscellaneous:
+        * CognitoIDP: UserPools now come with default values for the following attributes: Policies, AdminCreateUserConfig, EmailConfiguration, VerificationMessageTemplate
+        * ELBv2: Improved the response-format of the `create_rule()` and `set_rule_priorities()`-methods
+        * MediaConnect: Now has the correct format for flow/source ARN's
+        * Organizations: Fixes the behaviour for close_account()
+        * Sagemaker: Now supports tagging of Models, EndpointConfigs, ProcessingJobs
+
+
+3.1.6
+-----
+Docker Digest for 3.1.6: _sha256:722b9c05ad3454047688db4ba95991f6af4166c63d871149b1b1eef9d70be70f_
+
+    New Methods:
+        * Organizations:
+            * close_account()
+
+    Miscellaneous:
+        * Autoscaling: the BlockDeviceMappings in LaunchConfigurations and LaunchTemplates are now respected when launching EC2 instances
+        * CloudWatch: get_metric_data() now supports the Dimensions-parameter
+        * ELB: set_rule_priorities() now correctly returns the Rules-attribute
+        * ELBv2: create_target_group() now supports the Tags-parameter
+        * Events: delete_rule() now verifies whether any targets are still attached before deletion
+
+
+3.1.5
+-----
+Docker Digest for 3.1.5: _sha256:79050ce5b729f6eff3282a79dace9cb7e5983588250452f8821aeffa87eca334_
+
+    New Methods:
+        * ApplicationAutoscaling:
+            * delete_scheduled_action()
+            * describe_scheduled_actions()
+            * put_scheduled_action()
+
+        * Databrew:
+            * create_ruleset()
+            * delete_ruleset()
+            * list_rulesets()
+            * update_recipe()
+            * update_ruleset()
+
+        * EC2:
+            * describe_network_interface_attribute()
+
+    Miscellaneous:
+        * Glue:get_partitions() now supports the Expression-parameter
+        * RDS:delete_db_cluster() now supports the FinalDBSnapshotIdentifier-parameter
+        * S3 actions can now send notifications for (a subset of) supported events and targets
+
+3.1.4
+-----
+Docker Digest for 3.1.4: _sha256:795eb8a1d966ef30c53f504e358afb23ec262e5ad1cba18d474096c0fba794bd_
+
+    General:
+        * Compatible with botocore 1.24.30.
+          The IOTData service in older versions of Moto is incompatible with botocore >= 1.24.30, due to the fact that AWS changed their URL endpoints. 
+
+    New Services:
+        * QuickSight:
+            * create_data_set()
+            * create_group()
+            * create_group_membership()
+            * create_ingestion()
+            * delete_group()
+            * delete_user()
+            * describe_group()
+            * describe_group_membership()
+            * describe_user()
+            * list_groups()
+            * list_group_memberships()
+            * list_users()
+            * register_user()
+            * update_group()
+            * describe_group()
+            * describe_group()
+            * describe_group()
+
+        * Rekognition:
+            * get_text_detection()
+            * start_text_detection()
+
+    New Methods:
+        * EC2:
+            * delete_launch_template()
+
+        * ECS:
+            * create_capacity_provider()
+            * delete_capacity_provider()
+            * describe_capacity_providers()
+
+    Miscellaneous:
+        * Autoscaling:put_scaling_policy() now supports the parameters MetricAggregationType, MinAdjustmentMagnitude, EstimatedInstanceWarmup, PredictiveScalingConfiguration
+        * Autoscaling:create_auto_scaling_group() now supports launch template versions '$Latest' and '$Default'
+        * RDS: Improved tagging support for Clusters and ClusterSnapshots
+
+
+3.1.3
+-----
+Docker Digest for 3.1.3: _sha256:d0716d84d376e7aafeb4a40a29d298725aa39e6553b64f55a6be1287e4bee80c_
+
+    New Methods:
+        * TimestreamWrite:
+            * list_tags_for_resource()
+            * tag_resource()
+            * untag_resource()
+
+    Miscellaneous:
+        * EC2:run_instances(): Fixed a bug when supplying the NetworkInterfaces.Groups-parameter
+        * Logs:delete_metric_filter(): Fixed a bug where the logGroupName-validator was too strict
+
+
+3.1.2
+-----
+Docker Digest for 3.1.2: _sha256:884923ae6449b2db64e6805ef82209fcc5aab4991024c495aea07a191257aa4d_
+
+    Known Bugs:
+        * EC2:run_instances(): This call will fail when supplying the NetworkInterfaces.Groups-parameter 
+
+    New Methods:
+        * ELB
+            * attach_load_balancer_to_subnets()
+            * detach_load_balancer_from_subnets()
+            * describe_load_balancer_policies()
+            * delete_load_balancer_policy()
+            * enable_availability_zones_for_load_balancer()
+            * disable_availability_zones_for_load_balancer()
+
+        * ELBv2:
+            * add_listener_certificates()
+            * describe_listener_certificates()
+            * remove_listener_certificates()
+
+        * Glue:
+            * get_job()
+            * get_job_run()
+            * start_job_run()
+
+    Miscellaneous:
+        * AWSLambda:add_permission() now supports the Qualifier-parameter
+        * ELB:create_load_balancer() now retrieves the subnets based on the AvailabilityZones-parameter
+        * ELB:create_load_balancer() now creates a default SecurityGroup, if none is provided
+        * ELBv2:create_load_balancer() now supports the SubnetMappings-parameter
+        * ELBv2:create_listener() now supports the AlpnPolicy-parameter
+        * ELBv2: Improved tagging support
+        * ELBv2: Exposes the TargetGroupStickinessConfig-attribute when describing a Action of type ForwardConfig
+
+
+3.1.1
+-----
+Docker Digest for 3.1.1: _sha256:e2b8145574e01d1630be307f418211e09e089b87d8d87b1ac69878a50d8dde0c_
+
+    New Methods:
+        * AWSLambda:
+            * create_alias()
+            * delete_alias()
+            * delete_layer_version()
+            * get_alias()
+            * get_layer_version()
+            * update_alias()
+
+        * EFS:
+            * create_access_point()
+            * delete_access_point()
+            * describe_access_points()
+            * describe_lifecycle_configuration()
+            * describe_mount_target_security_groups()
+            * list_tags_for_resource()
+            * modify_mount_target_security_groups()
+            * put_lifecycle_configuration()
+            * tag_resource()
+            * untag_resource()
+
+    Miscellaneous:
+        * AWSLambda: get_function now returns the parameters Tags, LastUpdateStatus, TracingConfig
+        * ELBV2:describe_tags() now supports ListenerRules.
+
+
 3.1.0
 -----
 Docker Digest for 3.1.0: _sha256:1656754cf4de441d85b08f584d9dcb095880d3bf250f05da26a03ff219d586c8_

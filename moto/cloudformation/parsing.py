@@ -23,6 +23,7 @@ from moto.cloudwatch import models  # noqa  # pylint: disable=all
 from moto.datapipeline import models  # noqa  # pylint: disable=all
 from moto.dynamodb import models  # noqa  # pylint: disable=all
 from moto.ec2 import models as ec2_models
+from moto.ec2.models.core import TaggedEC2Resource
 from moto.ecr import models  # noqa  # pylint: disable=all
 from moto.ecs import models  # noqa  # pylint: disable=all
 from moto.efs import models  # noqa  # pylint: disable=all
@@ -45,8 +46,8 @@ from moto.ssm import models  # noqa  # pylint: disable=all
 
 # End ugly list of imports
 
-from moto.core import ACCOUNT_ID, CloudFormationModel
-from moto.s3 import s3_backend
+from moto.core import get_account_id, CloudFormationModel
+from moto.s3.models import s3_backends
 from moto.s3.utils import bucket_and_name_from_url
 from moto.ssm import ssm_backends
 from .utils import random_suffix
@@ -452,7 +453,7 @@ class ResourceMap(collections_abc.Mapping):
 
         # Create the default resources
         self._parsed_resources = {
-            "AWS::AccountId": ACCOUNT_ID,
+            "AWS::AccountId": get_account_id(),
             "AWS::Region": self._region_name,
             "AWS::StackId": stack_id,
             "AWS::StackName": stack_name,
@@ -527,7 +528,7 @@ class ResourceMap(collections_abc.Mapping):
                 if name == "AWS::Include":
                     location = params["Location"]
                     bucket_name, name = bucket_and_name_from_url(location)
-                    key = s3_backend.get_object(bucket_name, name)
+                    key = s3_backends["global"].get_object(bucket_name, name)
                     self._parsed_resources.update(json.loads(key.value))
 
     def parse_ssm_parameter(self, value, value_type):
@@ -643,7 +644,7 @@ class ResourceMap(collections_abc.Mapping):
         all_resources_ready = True
         for resource in self.__get_resources_in_dependency_order():
             instance = self[resource]
-            if isinstance(instance, ec2_models.TaggedEC2Resource):
+            if isinstance(instance, TaggedEC2Resource):
                 self.tags["aws:cloudformation:logical-id"] = resource
                 ec2_models.ec2_backends[self._region_name].create_tags(
                     [instance.physical_resource_id], self.tags

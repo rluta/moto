@@ -1,4 +1,4 @@
-from moto.core import BaseBackend, BaseModel
+from moto.core import get_account_id, BaseBackend, BaseModel
 from moto.core.utils import BackendDict
 from moto.ecs import ecs_backends
 from .exceptions import AWSValidationException
@@ -11,6 +11,8 @@ import uuid
 @unique
 class ResourceTypeExceptionValueSet(Enum):
     RESOURCE_TYPE = "ResourceType"
+    # MSK currently only has the "broker-storage" resource type which is not part of the resource_id
+    KAFKA_BROKER_STORAGE = "broker-storage"
 
 
 @unique
@@ -26,6 +28,7 @@ class ServiceNamespaceValueSet(Enum):
     COMPREHEND = "comprehend"
     ECS = "ecs"
     SAGEMAKER = "sagemaker"
+    KAFKA = "kafka"
 
 
 @unique
@@ -56,20 +59,16 @@ class ScalableDimensionValueSet(Enum):
     SAGEMAKER_VARIANT_DESIRED_INSTANCE_COUNT = "sagemaker:variant:DesiredInstanceCount"
     EC2_SPOT_FLEET_REQUEST_TARGET_CAPACITY = "ec2:spot-fleet-request:TargetCapacity"
     ECS_SERVICE_DESIRED_COUNT = "ecs:service:DesiredCount"
+    KAFKA_BROKER_STORAGE_VOLUME_SIZE = "kafka:broker-storage:VolumeSize"
 
 
 class ApplicationAutoscalingBackend(BaseBackend):
-    def __init__(self, region):
-        super().__init__()
-        self.region = region
-        self.ecs_backend = ecs_backends[region]
+    def __init__(self, region_name, account_id):
+        super().__init__(region_name, account_id)
+        self.ecs_backend = ecs_backends[region_name]
         self.targets = OrderedDict()
         self.policies = {}
-
-    def reset(self):
-        region = self.region
-        self.__dict__ = {}
-        self.__init__(region)
+        self.scheduled_actions = list()
 
     @staticmethod
     def default_vpc_endpoint_service(service_region, zones):
@@ -80,7 +79,7 @@ class ApplicationAutoscalingBackend(BaseBackend):
 
     @property
     def applicationautoscaling_backend(self):
-        return applicationautoscaling_backends[self.region]
+        return applicationautoscaling_backends[self.region_name]
 
     def describe_scalable_targets(self, namespace, r_ids=None, dimension=None):
         """Describe scalable targets."""
@@ -161,7 +160,7 @@ class ApplicationAutoscalingBackend(BaseBackend):
         if policy_key in self.policies:
             old_policy = self.policies[policy_key]
             policy = FakeApplicationAutoscalingPolicy(
-                region_name=self.region,
+                region_name=self.region_name,
                 policy_name=policy_name,
                 service_namespace=service_namespace,
                 resource_id=resource_id,
@@ -171,7 +170,7 @@ class ApplicationAutoscalingBackend(BaseBackend):
             )
         else:
             policy = FakeApplicationAutoscalingPolicy(
-                region_name=self.region,
+                region_name=self.region_name,
                 policy_name=policy_name,
                 service_namespace=service_namespace,
                 resource_id=resource_id,
@@ -228,6 +227,87 @@ class ApplicationAutoscalingBackend(BaseBackend):
                     service_namespace, resource_id, scalable_dimension, policy_name
                 )
             )
+
+    def delete_scheduled_action(
+        self, service_namespace, scheduled_action_name, resource_id, scalable_dimension
+    ):
+        self.scheduled_actions = [
+            a
+            for a in self.scheduled_actions
+            if not (
+                a.service_namespace == service_namespace
+                and a.scheduled_action_name == scheduled_action_name
+                and a.resource_id == resource_id
+                and a.scalable_dimension == scalable_dimension
+            )
+        ]
+
+    def describe_scheduled_actions(
+        self, scheduled_action_names, service_namespace, resource_id, scalable_dimension
+    ):
+        """
+        Pagination is not yet implemented
+        """
+        result = [
+            a
+            for a in self.scheduled_actions
+            if a.service_namespace == service_namespace
+        ]
+        if scheduled_action_names:
+            result = [
+                a for a in result if a.scheduled_action_name in scheduled_action_names
+            ]
+        if resource_id:
+            result = [a for a in result if a.resource_id == resource_id]
+        if scalable_dimension:
+            result = [a for a in result if a.scalable_dimension == scalable_dimension]
+        return result
+
+    def put_scheduled_action(
+        self,
+        service_namespace,
+        schedule,
+        timezone,
+        scheduled_action_name,
+        resource_id,
+        scalable_dimension,
+        start_time,
+        end_time,
+        scalable_target_action,
+    ):
+        existing_action = next(
+            (
+                a
+                for a in self.scheduled_actions
+                if a.service_namespace == service_namespace
+                and a.resource_id == resource_id
+                and a.scalable_dimension == scalable_dimension
+            ),
+            None,
+        )
+        if existing_action:
+            existing_action.update(
+                schedule,
+                timezone,
+                scheduled_action_name,
+                start_time,
+                end_time,
+                scalable_target_action,
+            )
+        else:
+            action = FakeScheduledAction(
+                service_namespace,
+                schedule,
+                timezone,
+                scheduled_action_name,
+                resource_id,
+                scalable_dimension,
+                start_time,
+                end_time,
+                scalable_target_action,
+                self.region_name,
+            )
+            self.scheduled_actions.append(action)
 
 
 def _target_params_are_valid(namespace, r_id, dimension):
@@ -342,8 +422,12 @@ class FakeApplicationAutoscalingPolicy(BaseModel):
         self.policy_name = policy_name
         self.policy_type = policy_type
         self._guid = uuid.uuid4()
-        self.policy_arn = "arn:aws:autoscaling:{}:scalingPolicy:{}:resource/sagemaker/{}:policyName/{}".format(
-            region_name, self._guid, self.resource_id, self.policy_name
+        self.policy_arn = "arn:aws:autoscaling:{}:scalingPolicy:{}:resource/{}/{}:policyName/{}".format(
+            region_name,
+            self._guid,
+            self.service_namespace,
+            self.resource_id,
+            self.policy_name,
         )
         self.creation_time = time.time()
 
@@ -352,6 +436,53 @@ class FakeApplicationAutoscalingPolicy(BaseModel):
         return "{}\t{}\t{}\t{}".format(
             service_namespace, resource_id, scalable_dimension, policy_name
         )
+
+
+class FakeScheduledAction(BaseModel):
+    def __init__(
+        self,
+        service_namespace,
+        schedule,
+        timezone,
+        scheduled_action_name,
+        resource_id,
+        scalable_dimension,
+        start_time,
+        end_time,
+        scalable_target_action,
+        region,
+    ):
+        self.arn = f"arn:aws:autoscaling:{region}:{get_account_id()}:scheduledAction:{service_namespace}:scheduledActionName/{scheduled_action_name}"
+        self.service_namespace = service_namespace
+        self.schedule = schedule
+        self.timezone = timezone
+        self.scheduled_action_name = scheduled_action_name
+        self.resource_id = resource_id
+        self.scalable_dimension = scalable_dimension
+        self.start_time = start_time
+        self.end_time = end_time
+        self.scalable_target_action = scalable_target_action
+        self.creation_time = time.time()
+
+    def update(
+        self,
+        schedule,
+        timezone,
+        scheduled_action_name,
+        start_time,
+        end_time,
+        scalable_target_action,
+    ):
+        if scheduled_action_name:
+            self.scheduled_action_name = scheduled_action_name
+        if schedule:
+            self.schedule = schedule
+        if timezone:
+            self.timezone = timezone
+        if scalable_target_action:
+            self.scalable_target_action = scalable_target_action
+        self.start_time = start_time
+        self.end_time = end_time
 
 
 applicationautoscaling_backends = BackendDict(ApplicationAutoscalingBackend, "ec2")

@@ -2,8 +2,8 @@ import uuid
 
 from datetime import datetime, timedelta
 
-from moto.core import ACCOUNT_ID, BaseBackend, BaseModel
-from moto.core.models import CloudFormationModel
+from moto.core import get_account_id, BaseBackend, BaseModel
+from moto.core import CloudFormationModel
 from moto.core.utils import unix_time_millis, BackendDict
 from moto.utilities.paginator import paginate
 from moto.logs.metric_filters import MetricFilters
@@ -13,7 +13,7 @@ from moto.logs.exceptions import (
     InvalidParameterException,
     LimitExceededException,
 )
-from moto.s3 import s3_backend
+from moto.s3.models import s3_backends
 from .utils import PAGINATION_MODEL
 
 MAX_RESOURCE_POLICIES_PER_REGION = 10
@@ -60,7 +60,7 @@ class LogStream(BaseModel):
 
     def __init__(self, region, log_group, name):
         self.region = region
-        self.arn = f"arn:aws:logs:{region}:{ACCOUNT_ID}:log-group:{log_group}:log-stream:{name}"
+        self.arn = f"arn:aws:logs:{region}:{get_account_id()}:log-group:{log_group}:log-stream:{name}"
         self.creation_time = int(unix_time_millis())
         self.first_event_timestamp = None
         self.last_event_timestamp = None
@@ -261,7 +261,7 @@ class LogGroup(CloudFormationModel):
     def __init__(self, region, name, tags, **kwargs):
         self.name = name
         self.region = region
-        self.arn = f"arn:aws:logs:{region}:{ACCOUNT_ID}:log-group:{name}"
+        self.arn = f"arn:aws:logs:{region}:{get_account_id()}:log-group:{name}"
         self.creation_time = int(unix_time_millis())
         self.tags = tags
         self.streams = dict()  # {name: LogStream}
@@ -297,9 +297,13 @@ class LogGroup(CloudFormationModel):
     def create_log_stream(self, log_stream_name):
         if log_stream_name in self.streams:
             raise ResourceAlreadyExistsException()
-        self.streams[log_stream_name] = LogStream(
-            self.region, self.name, log_stream_name
-        )
+        stream = LogStream(self.region, self.name, log_stream_name)
+        filters = self.describe_subscription_filters()
+
+        if filters:
+            stream.destination_arn = filters[0]["destinationArn"]
+            stream.filter_name = filters[0]["filterName"]
+        self.streams[log_stream_name] = stream
 
     def delete_log_stream(self, log_stream_name):
         if log_stream_name not in self.streams:
@@ -592,17 +596,12 @@ class LogResourcePolicy(CloudFormationModel):
 
 
 class LogsBackend(BaseBackend):
-    def __init__(self, region_name):
-        self.region_name = region_name
+    def __init__(self, region_name, account_id):
+        super().__init__(region_name, account_id)
         self.groups = dict()  # { logGroupName: LogGroup}
         self.filters = MetricFilters()
         self.queries = dict()
         self.resource_policies = dict()
-
-    def reset(self):
-        region_name = self.region_name
-        self.__dict__ = {}
-        self.__init__(region_name)
 
     @staticmethod
     def default_vpc_endpoint_service(service_region, zones):
@@ -888,11 +887,10 @@ class LogsBackend(BaseBackend):
                 lambda_backends,
             )
 
-            lambda_func = lambda_backends[self.region_name].get_function(
-                destination_arn
-            )
+            try:
+                lambda_backends[self.region_name].get_function(destination_arn)
             # no specific permission check implemented
-            if not lambda_func:
+            except Exception:
                 raise InvalidParameterException(
                     "Could not execute the lambda function. Make sure you "
                     "have given CloudWatch Logs permission to execute your "
@@ -942,7 +940,7 @@ class LogsBackend(BaseBackend):
         return query_id
 
     def create_export_task(self, log_group_name, destination):
-        s3_backend.get_bucket(destination)
+        s3_backends["global"].get_bucket(destination)
         if log_group_name not in self.groups:
             raise ResourceNotFoundException()
         task_id = uuid.uuid4()

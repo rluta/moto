@@ -81,7 +81,9 @@ cognito-idp
 - [X] describe_user_pool_domain
 - [ ] forget_device
 - [X] forgot_password
-  The ForgotPassword operation is partially broken in AWS. If the input is 100% correct it works fine.
+  
+        The ForgotPassword operation is partially broken in AWS. If the input is 100% correct it works fine.
+
         Otherwise you get semi-random garbage and HTTP 200 OK, for example:
         - recovery for username which is not registered in any cognito pool
         - recovery for username belonging to a different user pool than the client id is registered to
@@ -98,7 +100,7 @@ cognito-idp
 - [X] get_user
 - [ ] get_user_attribute_verification_code
 - [X] get_user_pool_mfa_config
-- [ ] global_sign_out
+- [X] global_sign_out
 - [X] initiate_auth
 - [ ] list_devices
 - [X] list_groups
@@ -125,10 +127,14 @@ cognito-idp
 - [ ] untag_resource
 - [ ] update_auth_event_feedback
 - [ ] update_device_status
-- [ ] update_group
+- [X] update_group
 - [X] update_identity_provider
 - [ ] update_resource_server
-- [ ] update_user_attributes
+- [X] update_user_attributes
+  
+        The parameter ClientMetadata has not yet been implemented. No CodeDeliveryDetails are returned.
+        
+
 - [X] update_user_pool
 - [X] update_user_pool_client
 - [X] update_user_pool_domain
@@ -139,3 +145,10 @@ cognito-idp
 
 - [ ] verify_user_attribute
 
+
+|start-h3| Stable Cognito User Pool Id |end-h3|
+
+In some cases, you need to have reproducible IDs for the user pool.
+For example, a single initialization before the start of integration tests.
+
+This behavior can be enabled by passing the environment variable: MOTO_COGNITO_IDP_USER_POOL_ID_STRATEGY=HASH.

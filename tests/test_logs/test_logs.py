@@ -181,26 +181,32 @@ def test_describe_metric_filters_multiple_happy():
 
 @mock_logs
 def test_delete_metric_filter():
-    conn = boto3.client("logs", "us-west-2")
+    client = boto3.client("logs", "us-west-2")
 
-    response = put_metric_filter(conn, 1)
-    assert response["ResponseMetadata"]["HTTPStatusCode"] == 200
+    lg_name = "/hello-world/my-cool-endpoint"
+    client.create_log_group(logGroupName=lg_name)
+    client.put_metric_filter(
+        logGroupName=lg_name,
+        filterName="my-cool-filter",
+        filterPattern="{ $.val = * }",
+        metricTransformations=[
+            {
+                "metricName": "my-metric",
+                "metricNamespace": "my-namespace",
+                "metricValue": "$.value",
+            }
+        ],
+    )
 
-    response = put_metric_filter(conn, 2)
-    assert response["ResponseMetadata"]["HTTPStatusCode"] == 200
-
-    response = conn.delete_metric_filter(
-        filterName="filterName", logGroupName="logGroupName1"
+    response = client.delete_metric_filter(
+        filterName="filterName", logGroupName=lg_name
     )
     assert response["ResponseMetadata"]["HTTPStatusCode"] == 200
 
-    response = conn.describe_metric_filters(
+    response = client.describe_metric_filters(
         filterNamePrefix="filter", logGroupName="logGroupName2"
     )
-    assert response["metricFilters"][0]["filterName"] == "filterName2"
-
-    response = conn.describe_metric_filters(logGroupName="logGroupName2")
-    assert response["metricFilters"][0]["filterName"] == "filterName2"
+    response.should.have.key("metricFilters").equals([])
 
 
 @mock_logs
@@ -1179,7 +1185,7 @@ def test_describe_log_streams_simple_paging():
     # Get stream 1-4
     resp = client.describe_log_streams(logGroupName=group_name, limit=4)
     resp["logStreams"].should.have.length_of(4)
-    [l["logStreamName"] for l in resp["logStreams"]].should.equal(
+    [stream["logStreamName"] for stream in resp["logStreams"]].should.equal(
         ["stream0", "stream1", "stream2", "stream3"]
     )
     resp.should.have.key("nextToken")
@@ -1189,7 +1195,7 @@ def test_describe_log_streams_simple_paging():
         logGroupName=group_name, limit=4, nextToken=str(resp["nextToken"])
     )
     resp["logStreams"].should.have.length_of(4)
-    [l["logStreamName"] for l in resp["logStreams"]].should.equal(
+    [stream["logStreamName"] for stream in resp["logStreams"]].should.equal(
         ["stream4", "stream5", "stream6", "stream7"]
     )
     resp.should.have.key("nextToken")
@@ -1199,7 +1205,7 @@ def test_describe_log_streams_simple_paging():
         logGroupName=group_name, limit=4, nextToken=str(resp["nextToken"])
     )
     resp["logStreams"].should.have.length_of(2)
-    [l["logStreamName"] for l in resp["logStreams"]].should.equal(
+    [stream["logStreamName"] for stream in resp["logStreams"]].should.equal(
         ["stream8", "stream9"]
     )
     resp.should_not.have.key("nextToken")

@@ -1,5 +1,4 @@
 import re
-from os import environ
 
 import boto3
 import pytest
@@ -32,12 +31,12 @@ SAMPLE_2_PARAMS = {
 
 
 @pytest.fixture(scope="function")
-def aws_credentials():
+def aws_credentials(monkeypatch):
     """Mocked AWS Credentials for moto."""
-    environ["AWS_ACCESS_KEY_ID"] = "testing"
-    environ["AWS_SECRET_ACCESS_KEY"] = "testing"
-    environ["AWS_SECURITY_TOKEN"] = "testing"
-    environ["AWS_SESSION_TOKEN"] = "testing"
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_SECURITY_TOKEN", "testing")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
 
 
 @pytest.fixture(scope="function")
@@ -70,6 +69,8 @@ def test_create_file_system_correct_use(efs):
     assert create_fs_resp["PerformanceMode"] == "generalPurpose"
     assert create_fs_resp["Encrypted"] is False
     assert create_fs_resp["NumberOfMountTargets"] == 0
+    assert create_fs_resp["Name"] == "Test EFS Container"
+
     for key_name in ["Value", "ValueInIA", "ValueInStandard"]:
         assert key_name in create_fs_resp["SizeInBytes"]
         assert create_fs_resp["SizeInBytes"][key_name] == 0
@@ -80,7 +81,7 @@ def test_create_file_system_correct_use(efs):
         efs.describe_backup_policy(FileSystemId=create_fs_resp["FileSystemId"])
     resp = exc_info.value.response
     assert resp["ResponseMetadata"]["HTTPStatusCode"] == 404
-    assert "PolicyNotFound" in resp["Error"]["Message"]
+    assert "PolicyNotFound" == resp["Error"]["Code"]
 
     # Check the arn in detail
     match_obj = re.match(ARN_PATT, create_fs_resp["FileSystemArn"])
@@ -108,10 +109,12 @@ def test_create_file_system_aws_sample_1(efs):
         "SizeInBytes",
         "Tags",
         "ThroughputMode",
+        "Name",
     }
     assert resp["Tags"] == [{"Key": "Name", "Value": "Test Group1"}]
     assert resp["PerformanceMode"] == "generalPurpose"
     assert resp["Encrypted"]
+    assert resp["Name"] == "Test Group1"
 
     policy_resp = efs.describe_backup_policy(FileSystemId=resp["FileSystemId"])
     assert policy_resp["BackupPolicy"]["Status"] == "ENABLED"
@@ -137,11 +140,13 @@ def test_create_file_system_aws_sample_2(efs):
         "FileSystemArn",
         "NumberOfMountTargets",
         "OwnerId",
+        "Name",
     }
     assert resp["ProvisionedThroughputInMibps"] == 60
     assert resp["AvailabilityZoneId"] == "usw2-az1"
     assert resp["AvailabilityZoneName"] == "us-west-2b"
     assert resp["ThroughputMode"] == "provisioned"
+    assert resp["Name"] == "Test Group1"
 
     policy_resp = efs.describe_backup_policy(FileSystemId=resp["FileSystemId"])
     assert policy_resp["BackupPolicy"]["Status"] == "ENABLED"
@@ -167,11 +172,31 @@ def test_create_file_system_file_system_already_exists(efs):
         efs.create_file_system(CreationToken="foo")
     resp = exc_info.value.response
     assert resp["ResponseMetadata"]["HTTPStatusCode"] == 409
-    assert "FileSystemAlreadyExists" in resp["Error"]["Message"]
+    assert "FileSystemAlreadyExists" == resp["Error"]["Code"]
 
 
 # Testing Describe
 # ================
+
+
+def test_describe_file_systems_using_identifier(efs):
+    # Create the file system.
+    create_fs_resp = efs.create_file_system(CreationToken="foobar")
+    create_fs_resp.pop("ResponseMetadata")
+    fs_id = create_fs_resp["FileSystemId"]
+
+    # Describe the file system.
+    desc_fs_resp = efs.describe_file_systems(FileSystemId=fs_id)
+    desc_fs_resp.should.have.key("FileSystems").length_of(1)
+    desc_fs_resp["FileSystems"][0].should.have.key("FileSystemId").equals(fs_id)
+    assert desc_fs_resp["FileSystems"][0]["Name"] == ""
+
+
+def test_describe_file_systems_using_unknown_identifier(efs):
+    with pytest.raises(ClientError) as exc:
+        efs.describe_file_systems(FileSystemId="unknown")
+    err = exc.value.response["Error"]
+    err["Code"].should.equal("FileSystemNotFound")
 
 
 def test_describe_file_systems_minimal_case(efs):
@@ -201,8 +226,10 @@ def test_describe_file_systems_minimal_case(efs):
         "FileSystemArn",
         "NumberOfMountTargets",
         "OwnerId",
+        "Name",
     }
     assert file_system["FileSystemId"] == create_fs_resp["FileSystemId"]
+    assert file_system["Name"] == ""
 
     # Pop out the timestamps and see if the rest of the description is the same.
     create_fs_resp["SizeInBytes"].pop("Timestamp")
@@ -239,11 +266,13 @@ def test_describe_file_systems_aws_create_sample_2(efs):
         "FileSystemArn",
         "NumberOfMountTargets",
         "OwnerId",
+        "Name",
     }
     assert file_system["ProvisionedThroughputInMibps"] == 60
     assert file_system["AvailabilityZoneId"] == "usw2-az1"
     assert file_system["AvailabilityZoneName"] == "us-west-2b"
     assert file_system["ThroughputMode"] == "provisioned"
+    assert file_system["Name"] == "Test Group1"
 
 
 def test_describe_file_systems_paging(efs):
@@ -306,7 +335,7 @@ def test_describe_file_systems_invalid_marker(efs):
         efs.describe_file_systems(Marker="fiddlesticks")
     resp = exc_info.value.response
     assert has_status_code(resp, 400)
-    assert "BadRequest" in resp["Error"]["Message"]
+    assert "BadRequest" == resp["Error"]["Code"]
 
 
 def test_describe_file_systems_invalid_creation_token(efs):
@@ -320,7 +349,7 @@ def test_describe_file_systems_invalid_file_system_id(efs):
         efs.describe_file_systems(FileSystemId="fs-29879313")
     resp = exc_info.value.response
     assert has_status_code(resp, 404)
-    assert "FileSystemNotFound" in resp["Error"]["Message"]
+    assert "FileSystemNotFound" == resp["Error"]["Code"]
 
 
 def test_describe_file_system_creation_token_and_file_system_id(efs):
@@ -328,7 +357,7 @@ def test_describe_file_system_creation_token_and_file_system_id(efs):
         efs.describe_file_systems(CreationToken="fizzle", FileSystemId="fs-07987987")
     resp = exc_info.value.response
     assert has_status_code(resp, 400)
-    assert "BadRequest" in resp["Error"]["Message"]
+    assert "BadRequest" == resp["Error"]["Code"]
 
 
 # Testing Delete
@@ -358,4 +387,4 @@ def test_delete_file_system_invalid_file_system_id(efs):
         efs.delete_file_system(FileSystemId="fs-2394287")
     resp = exc_info.value.response
     assert has_status_code(resp, 404)
-    assert "FileSystemNotFound" in resp["Error"]["Message"]
+    assert "FileSystemNotFound" == resp["Error"]["Code"]

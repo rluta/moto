@@ -81,7 +81,7 @@ ec2
 - [ ] create_client_vpn_route
 - [X] create_customer_gateway
 - [ ] create_default_subnet
-- [ ] create_default_vpc
+- [X] create_default_vpc
 - [X] create_dhcp_options
 - [X] create_egress_only_internet_gateway
 - [ ] create_fleet
@@ -163,7 +163,7 @@ ec2
 - [ ] delete_ipam_pool
 - [ ] delete_ipam_scope
 - [X] delete_key_pair
-- [ ] delete_launch_template
+- [X] delete_launch_template
 - [ ] delete_launch_template_versions
 - [ ] delete_local_gateway_route
 - [ ] delete_local_gateway_route_table_vpc_association
@@ -427,6 +427,7 @@ ec2
 - [ ] get_groups_for_capacity_reservation
 - [ ] get_host_reservation_purchase_preview
 - [ ] get_instance_types_from_instance_requirements
+- [ ] get_instance_uefi_data
 - [ ] get_ipam_address_history
 - [ ] get_ipam_pool_allocations
 - [ ] get_ipam_pool_cidrs
@@ -474,6 +475,7 @@ ec2
 - [ ] modify_instance_credit_specification
 - [ ] modify_instance_event_start_time
 - [ ] modify_instance_event_window
+- [ ] modify_instance_maintenance_options
 - [ ] modify_instance_metadata_options
 - [ ] modify_instance_placement
 - [ ] modify_ipam
@@ -561,10 +563,27 @@ ec2
 - [X] revoke_security_group_egress
 - [X] revoke_security_group_ingress
 - [X] run_instances
+  
+        The Placement-parameter is validated to verify the availability-zone exists for the current region.
+
+        The InstanceType-parameter can be validated, to see if it is a known instance-type.
+        Enable this validation by setting the environment variable `MOTO_EC2_ENABLE_INSTANCE_TYPE_VALIDATION=true`
+
+        The ImageId-parameter can be validated, to see if it is a known AMI.
+        Enable this validation by setting the environment variable `MOTO_ENABLE_AMI_VALIDATION=true`
+
+        The KeyPair-parameter can be validated, to see if it is a known key-pair.
+        Enable this validation by setting the environment variable `MOTO_ENABLE_KEYPAIR_VALIDATION=true`
+        
+
 - [ ] run_scheduled_instances
 - [ ] search_local_gateway_routes
 - [ ] search_transit_gateway_multicast_groups
 - [X] search_transit_gateway_routes
+  
+        The following filters are currently supported: type, state, route-search.exact-match
+        
+
 - [ ] send_diagnostic_interrupt
 - [X] start_instances
 - [ ] start_network_insights_access_scope_analysis

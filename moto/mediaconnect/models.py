@@ -1,7 +1,7 @@
 from collections import OrderedDict
 from uuid import uuid4
 
-from moto.core import BaseBackend, BaseModel
+from moto.core import get_account_id, BaseBackend, BaseModel
 from moto.core.utils import BackendDict
 from moto.mediaconnect.exceptions import NotFoundException
 
@@ -72,16 +72,33 @@ class Resource(BaseModel):
 
 
 class MediaConnectBackend(BaseBackend):
-    def __init__(self, region_name=None):
-        super().__init__()
-        self.region_name = region_name
+    def __init__(self, region_name, account_id):
+        super().__init__(region_name, account_id)
         self._flows = OrderedDict()
         self._resources = OrderedDict()
 
-    def reset(self):
-        region_name = self.region_name
-        self.__dict__ = {}
-        self.__init__(region_name)
+    def _add_source_details(self, source, flow_id, ingest_ip="127.0.0.1"):
+        if source:
+            source["sourceArn"] = (
+                f"arn:aws:mediaconnect:{self.region_name}:{get_account_id()}:source"
+                f":{flow_id}:{source['name']}"
+            )
+            if not source.get("entitlementArn"):
+                source["ingestIp"] = ingest_ip
+
+    def _create_flow_add_details(self, flow):
+        flow_id = uuid4().hex
+
+        flow.description = "A Moto test flow"
+        flow.egress_ip = "127.0.0.1"
+        flow.flow_arn = f"arn:aws:mediaconnect:{self.region_name}:{get_account_id()}:flow:{flow_id}:{flow.name}"
+
+        for index, _source in enumerate(flow.sources):
+            self._add_source_details(_source, flow_id, f"127.0.0.{index}")
+
+        for index, output in enumerate(flow.outputs or []):
+            if output.get("protocol") in ["srt-listener", "zixi-pull"]:
+                output["listenerAddress"] = f"{index}.0.0.0"
 
     def create_flow(
         self,
@@ -94,10 +111,6 @@ class MediaConnectBackend(BaseBackend):
         sources,
         vpc_interfaces,
     ):
-        if isinstance(source, dict) and source.get("name"):
-            source["sourceArn"] = "arn:aws:mediaconnect:source:{}".format(
-                source["name"]
-            )
         flow = Flow(
             availability_zone=availability_zone,
             entitlements=entitlements,
@@ -108,10 +121,7 @@ class MediaConnectBackend(BaseBackend):
             sources=sources,
             vpc_interfaces=vpc_interfaces,
         )
-        flow.description = "A Moto test flow"
-        flow.egress_ip = "127.0.0.1"
-        flow_id = uuid4().hex
-        flow.flow_arn = "arn:aws:mediaconnect:flow:{}".format(flow_id)
+        self._create_flow_add_details(flow)
         self._flows[flow.flow_arn] = flow
         return flow
 

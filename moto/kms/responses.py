@@ -3,7 +3,7 @@ import json
 import os
 import re
 
-from moto.core import ACCOUNT_ID
+from moto.core import get_account_id
 from moto.core.responses import BaseResponse
 from moto.kms.utils import RESERVED_ALIASES
 from .models import kms_backends
@@ -40,7 +40,7 @@ class KmsResponse(BaseResponse):
             id_type = "key/"
 
         return "arn:aws:kms:{region}:{account}:{id_type}{key_id}".format(
-            region=self.region, account=ACCOUNT_ID, id_type=id_type, key_id=key_id
+            region=self.region, account=get_account_id(), id_type=id_type, key_id=key_id
         )
 
     def _validate_cmk_id(self, key_id):
@@ -221,7 +221,9 @@ class KmsResponse(BaseResponse):
             raise AlreadyExistsException(
                 "An alias with the name arn:aws:kms:{region}:{account_id}:{alias_name} "
                 "already exists".format(
-                    region=self.region, account_id=ACCOUNT_ID, alias_name=alias_name
+                    region=self.region,
+                    account_id=get_account_id(),
+                    alias_name=alias_name,
                 )
             )
 
@@ -256,7 +258,9 @@ class KmsResponse(BaseResponse):
                 response_aliases.append(
                     {
                         "AliasArn": "arn:aws:kms:{region}:{account_id}:{alias_name}".format(
-                            region=region, account_id=ACCOUNT_ID, alias_name=alias_name
+                            region=region,
+                            account_id=get_account_id(),
+                            alias_name=alias_name,
                         ),
                         "AliasName": alias_name,
                         "TargetKeyId": target_key_id,
@@ -271,7 +275,7 @@ class KmsResponse(BaseResponse):
                     {
                         "AliasArn": "arn:aws:kms:{region}:{account_id}:{reserved_alias}".format(
                             region=region,
-                            account_id=ACCOUNT_ID,
+                            account_id=get_account_id(),
                             reserved_alias=reserved_alias,
                         ),
                         "AliasName": reserved_alias,
@@ -279,6 +283,64 @@ class KmsResponse(BaseResponse):
                 )
 
         return json.dumps({"Truncated": False, "Aliases": response_aliases})
+
+    def create_grant(self):
+        key_id = self.parameters.get("KeyId")
+        grantee_principal = self.parameters.get("GranteePrincipal")
+        retiring_principal = self.parameters.get("RetiringPrincipal")
+        operations = self.parameters.get("Operations")
+        name = self.parameters.get("Name")
+        constraints = self.parameters.get("Constraints")
+
+        grant_id, grant_token = self.kms_backend.create_grant(
+            key_id,
+            grantee_principal,
+            operations,
+            name,
+            constraints=constraints,
+            retiring_principal=retiring_principal,
+        )
+        return json.dumps({"GrantId": grant_id, "GrantToken": grant_token})
+
+    def list_grants(self):
+        key_id = self.parameters.get("KeyId")
+        grant_id = self.parameters.get("GrantId")
+
+        grants = self.kms_backend.list_grants(key_id=key_id, grant_id=grant_id)
+        return json.dumps(
+            {
+                "Grants": [gr.to_json() for gr in grants],
+                "GrantCount": len(grants),
+                "Truncated": False,
+            }
+        )
+
+    def list_retirable_grants(self):
+        retiring_principal = self.parameters.get("RetiringPrincipal")
+
+        grants = self.kms_backend.list_retirable_grants(retiring_principal)
+        return json.dumps(
+            {
+                "Grants": [gr.to_json() for gr in grants],
+                "GrantCount": len(grants),
+                "Truncated": False,
+            }
+        )
+
+    def revoke_grant(self):
+        key_id = self.parameters.get("KeyId")
+        grant_id = self.parameters.get("GrantId")
+
+        self.kms_backend.revoke_grant(key_id, grant_id)
+        return "{}"
+
+    def retire_grant(self):
+        key_id = self.parameters.get("KeyId")
+        grant_id = self.parameters.get("GrantId")
+        grant_token = self.parameters.get("GrantToken")
+
+        self.kms_backend.retire_grant(key_id, grant_id, grant_token)
+        return "{}"
 
     def enable_key_rotation(self):
         """https://docs.aws.amazon.com/kms/latest/APIReference/API_EnableKeyRotation.html"""

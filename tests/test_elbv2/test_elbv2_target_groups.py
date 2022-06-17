@@ -38,6 +38,45 @@ def test_create_target_group_with_invalid_healthcheck_protocol():
 
 @mock_elbv2
 @mock_ec2
+def test_create_target_group_with_tags():
+    response, vpc, _, _, _, conn = create_load_balancer()
+
+    response = conn.create_target_group(
+        Name="a-target",
+        Protocol="HTTP",
+        Port=8080,
+        VpcId=vpc.id,
+        HealthCheckProtocol="HTTP",
+        HealthCheckPort="8080",
+        HealthCheckPath="/",
+        HealthCheckIntervalSeconds=5,
+        HealthCheckTimeoutSeconds=5,
+        HealthyThresholdCount=5,
+        UnhealthyThresholdCount=2,
+        Matcher={"HttpCode": "200"},
+        Tags=[{"Key": "key1", "Value": "val1"}],
+    )
+    target_group = response.get("TargetGroups")[0]
+    target_group_arn = target_group["TargetGroupArn"]
+
+    # Add tags to the target group
+    conn.add_tags(
+        ResourceArns=[target_group_arn],
+        Tags=[{"Key": "key2", "Value": "val2"}],
+    )
+    conn.describe_tags(ResourceArns=[target_group_arn])["TagDescriptions"][0][
+        "Tags"
+    ].should.equal([{"Key": "key1", "Value": "val1"}, {"Key": "key2", "Value": "val2"}])
+
+    # Verify they can be removed
+    conn.remove_tags(ResourceArns=[target_group_arn], TagKeys=["key1"])
+    conn.describe_tags(ResourceArns=[target_group_arn])["TagDescriptions"][0][
+        "Tags"
+    ].should.equal([{"Key": "key2", "Value": "val2"}])
+
+
+@mock_elbv2
+@mock_ec2
 def test_create_target_group_and_listeners():
     response, vpc, _, _, _, conn = create_load_balancer()
 
@@ -58,15 +97,8 @@ def test_create_target_group_and_listeners():
         Matcher={"HttpCode": "200"},
     )
     target_group = response.get("TargetGroups")[0]
-    target_group_arn = target_group["TargetGroupArn"]
-
-    # Add tags to the target group
-    conn.add_tags(
-        ResourceArns=[target_group_arn], Tags=[{"Key": "target", "Value": "group"}]
-    )
-    conn.describe_tags(ResourceArns=[target_group_arn])["TagDescriptions"][0][
-        "Tags"
-    ].should.equal([{"Key": "target", "Value": "group"}])
+    target_group_arn = target_group.get("TargetGroupArn")
+    target_group.get("HealthCheckProtocol").should.equal("HTTP")
 
     # Check it's in the describe_target_groups response
     response = conn.describe_target_groups()
@@ -77,15 +109,13 @@ def test_create_target_group_and_listeners():
         LoadBalancerArn=load_balancer_arn,
         Protocol="HTTP",
         Port=80,
-        DefaultActions=[
-            {"Type": "forward", "TargetGroupArn": target_group.get("TargetGroupArn")}
-        ],
+        DefaultActions=[{"Type": "forward", "TargetGroupArn": target_group_arn}],
     )
     listener = response.get("Listeners")[0]
     listener.get("Port").should.equal(80)
     listener.get("Protocol").should.equal("HTTP")
     listener.get("DefaultActions").should.equal(
-        [{"TargetGroupArn": target_group.get("TargetGroupArn"), "Type": "forward"}]
+        [{"TargetGroupArn": target_group_arn, "Type": "forward"}]
     )
     http_listener_arn = listener.get("ListenerArn")
 
@@ -95,7 +125,7 @@ def test_create_target_group_and_listeners():
     response.get("TargetGroups").should.have.length_of(1)
 
     # And another with SSL
-    actions = {"Type": "forward", "TargetGroupArn": target_group.get("TargetGroupArn")}
+    actions = {"Type": "forward", "TargetGroupArn": target_group_arn}
     response = conn.create_listener(
         LoadBalancerArn=load_balancer_arn,
         Protocol="HTTPS",
@@ -122,7 +152,7 @@ def test_create_target_group_and_listeners():
         ]
     )
     listener.get("DefaultActions").should.equal(
-        [{"TargetGroupArn": target_group.get("TargetGroupArn"), "Type": "forward"}]
+        [{"TargetGroupArn": target_group_arn, "Type": "forward"}]
     )
 
     https_listener_arn = listener.get("ListenerArn")
@@ -149,7 +179,7 @@ def test_create_target_group_and_listeners():
     # Try to delete the target group and it fails because there's a
     # listener referencing it
     with pytest.raises(ClientError) as e:
-        conn.delete_target_group(TargetGroupArn=target_group.get("TargetGroupArn"))
+        conn.delete_target_group(TargetGroupArn=target_group_arn)
     e.value.operation_name.should.equal("DeleteTargetGroup")
     e.value.args.should.equal(
         (
@@ -181,7 +211,7 @@ def test_create_target_group_and_listeners():
     response.get("TargetGroups").should.have.length_of(1)
 
     # Which we'll now delete
-    conn.delete_target_group(TargetGroupArn=target_group.get("TargetGroupArn"))
+    conn.delete_target_group(TargetGroupArn=target_group_arn)
     response = conn.describe_target_groups()
     response.get("TargetGroups").should.have.length_of(0)
 
@@ -357,10 +387,11 @@ def test_target_group_attributes():
 
     # The attributes should start with the two defaults
     response = conn.describe_target_group_attributes(TargetGroupArn=target_group_arn)
-    response["Attributes"].should.have.length_of(2)
+    response["Attributes"].should.have.length_of(5)
     attributes = {attr["Key"]: attr["Value"] for attr in response["Attributes"]}
     attributes["deregistration_delay.timeout_seconds"].should.equal("300")
     attributes["stickiness.enabled"].should.equal("false")
+    attributes["waf.fail_open.enabled"].should.equal("false")
 
     # Add cookie stickiness
     response = conn.modify_target_group_attributes(
@@ -379,7 +410,7 @@ def test_target_group_attributes():
 
     # These new values should be in the full attribute list
     response = conn.describe_target_group_attributes(TargetGroupArn=target_group_arn)
-    response["Attributes"].should.have.length_of(3)
+    response["Attributes"].should.have.length_of(6)
     attributes = {attr["Key"]: attr["Value"] for attr in response["Attributes"]}
     attributes["stickiness.type"].should.equal("lb_cookie")
     attributes["stickiness.enabled"].should.equal("true")

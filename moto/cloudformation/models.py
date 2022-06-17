@@ -7,8 +7,7 @@ from collections import OrderedDict
 from yaml.parser import ParserError  # pylint:disable=c-extension-no-member
 from yaml.scanner import ScannerError  # pylint:disable=c-extension-no-member
 
-from moto.core import BaseBackend, BaseModel
-from moto.core.models import ACCOUNT_ID
+from moto.core import BaseBackend, BaseModel, get_account_id
 from moto.core.utils import (
     iso_8601_datetime_with_milliseconds,
     iso_8601_datetime_without_milliseconds,
@@ -251,6 +250,17 @@ class FakeStack(BaseModel):
         self.creation_time = datetime.utcnow()
         self.status = "CREATE_PENDING"
 
+    def has_template(self, other_template):
+        our_template = (
+            self.template
+            if isinstance(self.template, dict)
+            else json.loads(self.template)
+        )
+        return our_template == json.loads(other_template)
+
+    def has_parameters(self, other_parameters):
+        return self.parameters == other_parameters
+
     def _create_resource_map(self):
         resource_map = ResourceMap(
             self.stack_id,
@@ -492,7 +502,7 @@ ClientRequestToken='{client_request_token}'""".format(
             timestamp=iso_8601_datetime_with_milliseconds(self.timestamp),
             event_id=self.event_id,
             logical_resource_id=self.logical_resource_id,
-            account_id=ACCOUNT_ID,
+            account_id=get_account_id(),
             resource_properties=self.resource_properties,
             resource_status=self.resource_status,
             resource_status_reason=self.resource_status_reason,
@@ -518,18 +528,19 @@ def filter_stacks(all_stacks, status_filter):
 
 
 class CloudFormationBackend(BaseBackend):
-    def __init__(self, region=None):
+    """
+    CustomResources are supported when running Moto in ServerMode.
+    Because creating these resources involves running a Lambda-function that informs the MotoServer about the status of the resources, the MotoServer has to be reachable for outside connections.
+    This means it has to run inside a Docker-container, or be started using `moto_server -h 0.0.0.0`.
+    """
+
+    def __init__(self, region_name, account_id):
+        super().__init__(region_name, account_id)
         self.stacks = OrderedDict()
         self.stacksets = OrderedDict()
         self.deleted_stacks = {}
         self.exports = OrderedDict()
         self.change_sets = OrderedDict()
-        self.region = region
-
-    def reset(self):
-        region = self.region
-        self.__dict__ = {}
-        self.__init__(region)
 
     @staticmethod
     def default_vpc_endpoint_service(service_region, zones):
@@ -660,13 +671,13 @@ class CloudFormationBackend(BaseBackend):
         tags=None,
         role_arn=None,
     ):
-        stack_id = generate_stack_id(name, self.region)
+        stack_id = generate_stack_id(name, self.region_name)
         new_stack = FakeStack(
             stack_id=stack_id,
             name=name,
             template=template,
             parameters=parameters,
-            region_name=self.region,
+            region_name=self.region_name,
             notification_arns=notification_arns,
             tags=tags,
             role_arn=role_arn,
@@ -701,13 +712,13 @@ class CloudFormationBackend(BaseBackend):
             else:
                 raise ValidationError(stack_name)
         else:
-            stack_id = generate_stack_id(stack_name, self.region)
+            stack_id = generate_stack_id(stack_name, self.region_name)
             stack = FakeStack(
                 stack_id=stack_id,
                 name=stack_name,
                 template={},
                 parameters=parameters,
-                region_name=self.region,
+                region_name=self.region_name,
                 notification_arns=notification_arns,
                 tags=tags,
                 role_arn=role_arn,
@@ -718,7 +729,7 @@ class CloudFormationBackend(BaseBackend):
                 "REVIEW_IN_PROGRESS", resource_status_reason="User Initiated"
             )
 
-        change_set_id = generate_changeset_id(change_set_name, self.region)
+        change_set_id = generate_changeset_id(change_set_name, self.region_name)
 
         new_change_set = FakeChangeSet(
             change_set_type=change_set_type,
@@ -732,8 +743,18 @@ class CloudFormationBackend(BaseBackend):
             tags=tags,
             role_arn=role_arn,
         )
-        new_change_set.status = "CREATE_COMPLETE"
-        new_change_set.execution_status = "AVAILABLE"
+        if (
+            change_set_type == "UPDATE"
+            and stack.has_template(template)
+            and stack.has_parameters(parameters)
+        ):
+            # Nothing has changed - mark it as such
+            new_change_set.status = "FAILED"
+            new_change_set.execution_status = "UNAVAILABLE"
+            new_change_set.status_reason = "The submitted information didn't contain changes. Submit different information to create a change set."
+        else:
+            new_change_set.status = "CREATE_COMPLETE"
+            new_change_set.execution_status = "AVAILABLE"
         self.change_sets[change_set_id] = new_change_set
         return change_set_id, stack.stack_id
 

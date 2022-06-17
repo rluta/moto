@@ -20,6 +20,7 @@ from moto.core.utils import (
     tags_from_cloudformation_tags_list,
     BackendDict,
 )
+from moto.utilities.utils import md5_hash
 from .utils import generate_receipt_handle
 from .exceptions import (
     MessageAttributesInvalid,
@@ -37,7 +38,7 @@ from .exceptions import (
     InvalidAttributeValue,
 )
 
-from moto.core import ACCOUNT_ID
+from moto.core import get_account_id
 
 DEFAULT_SENDER_ID = "AIDAIT2UOQQY3AUEKVGXU"
 
@@ -85,14 +86,14 @@ class Message(BaseModel):
 
     @property
     def body_md5(self):
-        md5 = hashlib.md5()
+        md5 = md5_hash()
         md5.update(self._body.encode("utf-8"))
         return md5.hexdigest()
 
     @property
     def attribute_md5(self):
 
-        md5 = hashlib.md5()
+        md5 = md5_hash()
 
         for attrName in sorted(self.message_attributes.keys()):
             self.validate_attribute_name(attrName)
@@ -262,7 +263,7 @@ class Queue(CloudFormationModel):
         now = unix_time()
         self.created_timestamp = now
         self.queue_arn = "arn:aws:sqs:{0}:{1}:{2}".format(
-            self.region, ACCOUNT_ID, self.name
+            self.region, get_account_id(), self.name
         )
         self.dead_letter_queue = None
 
@@ -474,7 +475,7 @@ class Queue(CloudFormationModel):
 
     @property
     def physical_resource_id(self):
-        return f"https://sqs.{self.region}.amazonaws.com/{ACCOUNT_ID}/{self.name}"
+        return f"https://sqs.{self.region}.amazonaws.com/{get_account_id()}/{self.name}"
 
     @property
     def attributes(self):
@@ -508,7 +509,7 @@ class Queue(CloudFormationModel):
 
     def url(self, request_url):
         return "{0}://{1}/{2}/{3}".format(
-            request_url.scheme, request_url.netloc, ACCOUNT_ID, self.name
+            request_url.scheme, request_url.netloc, get_account_id(), self.name
         )
 
     @property
@@ -544,7 +545,7 @@ class Queue(CloudFormationModel):
             your function once for each batch. When your function successfully processes
             a batch, Lambda deletes its messages from the queue.
             """
-            messages = backend.receive_messages(
+            messages = backend.receive_message(
                 self.name,
                 esm.batch_size,
                 self.receive_message_wait_time_seconds,
@@ -630,16 +631,9 @@ def _filter_message_attributes(message, input_message_attributes):
 
 
 class SQSBackend(BaseBackend):
-    def __init__(self, region_name):
-        self.region_name = region_name
+    def __init__(self, region_name, account_id):
+        super().__init__(region_name, account_id)
         self.queues: Dict[str, Queue] = {}
-        super().__init__()
-
-    def reset(self):
-        region_name = self.region_name
-        self._reset_model_refs()
-        self.__dict__ = {}
-        self.__init__(region_name)
 
     @staticmethod
     def default_vpc_endpoint_service(service_region, zones):
@@ -855,7 +849,7 @@ class SQSBackend(BaseBackend):
             unique_ids.add(_id)
         return None
 
-    def receive_messages(
+    def receive_message(
         self,
         queue_name,
         count,
@@ -863,20 +857,13 @@ class SQSBackend(BaseBackend):
         visibility_timeout,
         message_attribute_names=None,
     ):
-        """
-        Attempt to retrieve visible messages from a queue.
+        # Attempt to retrieve visible messages from a queue.
 
-        If a message was read by client and not deleted it is considered to be
-        "inflight" and cannot be read. We make attempts to obtain ``count``
-        messages but we may return less if messages are in-flight or there
-        are simple not enough messages in the queue.
+        # If a message was read by client and not deleted it is considered to be
+        # "inflight" and cannot be read. We make attempts to obtain ``count``
+        # messages but we may return less if messages are in-flight or there
+        # are simple not enough messages in the queue.
 
-        :param string queue_name: The name of the queue to read from.
-        :param int count: The maximum amount of messages to retrieve.
-        :param int visibility_timeout: The number of seconds the message should remain invisible to other queue readers.
-        :param int wait_seconds_timeout:  The duration (in seconds) for which the call waits for a message to arrive in
-         the queue before returning. If a message is available, the call returns sooner than WaitTimeSeconds
-        """
         if message_attribute_names is None:
             message_attribute_names = []
         queue = self.get_queue(queue_name)

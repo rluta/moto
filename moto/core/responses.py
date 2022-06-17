@@ -204,7 +204,10 @@ class BaseResponse(_TemplateEnvironmentMixin, ActionAuthenticatorMixin):
     def dispatch(cls, *args, **kwargs):
         return cls()._dispatch(*args, **kwargs)
 
-    def setup_class(self, request, full_url, headers):
+    def setup_class(self, request, full_url, headers, use_raw_body=False):
+        """
+        use_raw_body: Use incoming bytes if True, encode to string otherwise
+        """
         querystring = OrderedDict()
         if hasattr(request, "body"):
             # Boto
@@ -222,7 +225,7 @@ class BaseResponse(_TemplateEnvironmentMixin, ActionAuthenticatorMixin):
                 querystring[key] = [value]
 
         raw_body = self.body
-        if isinstance(self.body, bytes):
+        if isinstance(self.body, bytes) and not use_raw_body:
             self.body = self.body.decode("utf-8")
 
         if not querystring:
@@ -244,7 +247,7 @@ class BaseResponse(_TemplateEnvironmentMixin, ActionAuthenticatorMixin):
                 flat = flatten_json_request_body("", decoded, input_spec)
                 for key, value in flat.items():
                     querystring[key] = [value]
-            elif self.body:
+            elif self.body and not use_raw_body:
                 try:
                     querystring.update(
                         OrderedDict(
@@ -254,7 +257,7 @@ class BaseResponse(_TemplateEnvironmentMixin, ActionAuthenticatorMixin):
                             )
                         )
                     )
-                except (UnicodeEncodeError, UnicodeDecodeError):
+                except (UnicodeEncodeError, UnicodeDecodeError, AttributeError):
                     pass  # ignore encoding errors, as the body may not contain a legitimate querystring
         if not querystring:
             querystring.update(headers)
@@ -725,26 +728,6 @@ class BaseResponse(_TemplateEnvironmentMixin, ActionAuthenticatorMixin):
 
         return results
 
-    def _parse_tag_specification(self, param_prefix):
-        tags = self._get_list_prefix(param_prefix)
-
-        results = defaultdict(dict)
-        for tag in tags:
-            resource_type = tag.pop("resource_type")
-
-            param_index = 1
-            while True:
-                key_name = "tag.{0}._key".format(param_index)
-                value_name = "tag.{0}._value".format(param_index)
-
-                try:
-                    results[resource_type][tag[key_name]] = tag[value_name]
-                except KeyError:
-                    break
-                param_index += 1
-
-        return results
-
     def _get_object_map(self, prefix, name="Name", value="Value"):
         """
         Given a query dict like
@@ -808,69 +791,6 @@ class BaseResponse(_TemplateEnvironmentMixin, ActionAuthenticatorMixin):
             )
             raise DryRunClientError(error_type="DryRunOperation", message=message)
         return True
-
-
-class MotoAPIResponse(BaseResponse):
-    def reset_response(
-        self, request, full_url, headers
-    ):  # pylint: disable=unused-argument
-        if request.method == "POST":
-            from .models import moto_api_backend
-
-            moto_api_backend.reset()
-            return 200, {}, json.dumps({"status": "ok"})
-        return 400, {}, json.dumps({"Error": "Need to POST to reset Moto"})
-
-    def reset_auth_response(
-        self, request, full_url, headers
-    ):  # pylint: disable=unused-argument
-        if request.method == "POST":
-            previous_initial_no_auth_action_count = (
-                settings.INITIAL_NO_AUTH_ACTION_COUNT
-            )
-            settings.INITIAL_NO_AUTH_ACTION_COUNT = float(request.data.decode())
-            ActionAuthenticatorMixin.request_count = 0
-            return (
-                200,
-                {},
-                json.dumps(
-                    {
-                        "status": "ok",
-                        "PREVIOUS_INITIAL_NO_AUTH_ACTION_COUNT": str(
-                            previous_initial_no_auth_action_count
-                        ),
-                    }
-                ),
-            )
-        return 400, {}, json.dumps({"Error": "Need to POST to reset Moto Auth"})
-
-    def model_data(self, request, full_url, headers):  # pylint: disable=unused-argument
-        from moto.core.models import model_data
-
-        results = {}
-        for service in sorted(model_data):
-            models = model_data[service]
-            results[service] = {}
-            for name in sorted(models):
-                model = models[name]
-                results[service][name] = []
-                for instance in model.instances:
-                    inst_result = {}
-                    for attr in dir(instance):
-                        if not attr.startswith("_"):
-                            try:
-                                json.dumps(getattr(instance, attr))
-                            except TypeError:
-                                pass
-                            else:
-                                inst_result[attr] = getattr(instance, attr)
-                    results[service][name].append(inst_result)
-        return 200, {"Content-Type": "application/javascript"}, json.dumps(results)
-
-    def dashboard(self, request, full_url, headers):  # pylint: disable=unused-argument
-        from flask import render_template
-
-        return render_template("dashboard.html")
 
 
 class _RecursiveDictRef(object):
@@ -1101,7 +1021,7 @@ def xml_to_json_response(service_spec, operation, xml, result_node=None):
                         od[k] = [transform(v["member"], spec[k]["member"])]
                 elif isinstance(v["member"], list):
                     od[k] = [transform(o, spec[k]["member"]) for o in v["member"]]
-                elif isinstance(v["member"], OrderedDict):
+                elif isinstance(v["member"], (OrderedDict, dict)):
                     od[k] = [transform(v["member"], spec[k]["member"])]
                 else:
                     raise ValueError("Malformatted input")

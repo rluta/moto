@@ -186,13 +186,44 @@ def NodegroupBuilder(ClusterBuilder):
 # in the list at initialization, which means the mock
 # decorator must be used manually in this one case.
 ###
+
+
 @mock_eks
 def test_list_clusters_returns_empty_by_default():
     client = boto3.client(SERVICE, region_name=REGION)
 
     result = client.list_clusters()[ResponseAttributes.CLUSTERS]
 
-    result.should.be.empty
+    result.should.equal([])
+
+
+@mock_eks
+def test_list_tags_returns_empty_by_default(ClusterBuilder):
+    client, generated_test_data = ClusterBuilder(BatchCountSize.SINGLE)
+    cluster_arn = generated_test_data.cluster_describe_output[ClusterAttributes.ARN]
+    result = client.list_tags_for_resource(resourceArn=cluster_arn)
+    assert len(result["tags"]) == 0
+
+
+@mock_eks
+def test_list_tags_returns_all(ClusterBuilder):
+    client, generated_test_data = ClusterBuilder(BatchCountSize.SINGLE)
+    cluster_arn = generated_test_data.cluster_describe_output[ClusterAttributes.ARN]
+    client.tag_resource(resourceArn=cluster_arn, tags={"key1": "val1", "key2": "val2"})
+    result = client.list_tags_for_resource(resourceArn=cluster_arn)
+    assert len(result["tags"]) == 2
+    result.should.have.key("tags").equals({"key1": "val1", "key2": "val2"})
+
+
+@mock_eks
+def test_list_tags_returns_all_after_delete(ClusterBuilder):
+    client, generated_test_data = ClusterBuilder(BatchCountSize.SINGLE)
+    cluster_arn = generated_test_data.cluster_describe_output[ClusterAttributes.ARN]
+    client.tag_resource(resourceArn=cluster_arn, tags={"key1": "val1", "key2": "val2"})
+    client.untag_resource(resourceArn=cluster_arn, tagKeys=["key1"])
+    result = client.list_tags_for_resource(resourceArn=cluster_arn)
+    assert len(result["tags"]) == 1
+    result.should.have.key("tags").equals({"key2": "val2"})
 
 
 @mock_eks
@@ -403,7 +434,7 @@ def test_list_nodegroups_returns_empty_by_default(ClusterBuilder):
         clusterName=generated_test_data.existing_cluster_name
     )[ResponseAttributes.NODEGROUPS]
 
-    result.should.be.empty
+    result.should.equal([])
 
 
 @mock_eks
@@ -851,7 +882,7 @@ def test_list_fargate_profile_returns_empty_by_default(ClusterBuilder):
         clusterName=generated_test_data.existing_cluster_name
     )[ResponseAttributes.FARGATE_PROFILE_NAMES]
 
-    result.should.be.empty
+    result.should.equal([])
 
 
 @mock_eks
@@ -1343,7 +1374,7 @@ def all_arn_values_should_be_valid(expected_arn_values, pattern, arn_under_test)
         if expected_value:
             value.should.be.within(expected_value)
         else:
-            value.should.be.truthy
+            value.shouldnt.equal(None)
     region_matches_partition(findall[1], findall[0]).should.be.true
 
 

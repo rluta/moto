@@ -1,20 +1,20 @@
-from moto.core.responses import BaseResponse
 from moto.core.utils import camelcase_to_underscores
 from moto.ec2.exceptions import (
     MissingParameterError,
     InvalidParameterCombination,
     InvalidRequest,
 )
-from moto.ec2.utils import filters_from_querystring, dict_from_querystring
-from moto.core import ACCOUNT_ID
+from moto.core import get_account_id
 
 from copy import deepcopy
 
+from ._base_response import EC2BaseResponse
 
-class InstanceResponse(BaseResponse):
+
+class InstanceResponse(EC2BaseResponse):
     def describe_instances(self):
         self.error_on_dryrun()
-        filter_dict = filters_from_querystring(self.querystring)
+        filter_dict = self._filters_from_querystring()
         instance_ids = self._get_multi_param("InstanceId")
         token = self._get_param("NextToken")
         if instance_ids:
@@ -49,16 +49,17 @@ class InstanceResponse(BaseResponse):
         security_group_names = self._get_multi_param("SecurityGroup")
         kwargs = {
             "instance_type": self._get_param("InstanceType", if_none="m1.small"),
+            "is_instance_type_default": not self._get_param("InstanceType"),
             "placement": self._get_param("Placement.AvailabilityZone"),
             "region_name": self.region,
             "subnet_id": self._get_param("SubnetId"),
             "owner_id": owner_id,
             "key_name": self._get_param("KeyName"),
             "security_group_ids": self._get_multi_param("SecurityGroupId"),
-            "nics": dict_from_querystring("NetworkInterface", self.querystring),
+            "nics": self._get_multi_param("NetworkInterface."),
             "private_ip": self._get_param("PrivateIpAddress"),
             "associate_public_ip": self._get_param("AssociatePublicIpAddress"),
-            "tags": self._parse_tag_specification("TagSpecification"),
+            "tags": self._parse_tag_specification(),
             "ebs_optimized": self._get_param("EbsOptimized") or False,
             "instance_market_options": self._get_param(
                 "InstanceMarketOptions.MarketType"
@@ -154,7 +155,7 @@ class InstanceResponse(BaseResponse):
 
     def describe_instance_type_offerings(self):
         location_type_filters = self._get_param("LocationType")
-        filter_dict = filters_from_querystring(self.querystring)
+        filter_dict = self._filters_from_querystring()
         offerings = self.ec2_backend.describe_instance_type_offerings(
             location_type_filters, filter_dict
         )
@@ -384,7 +385,7 @@ EC2_RUN_INSTANCES = (
   <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
   <reservationId>{{ reservation.id }}</reservationId>
   <ownerId>"""
-    + ACCOUNT_ID
+    + get_account_id()
     + """</ownerId>
   <groupSet>
     <item>
@@ -471,7 +472,7 @@ EC2_RUN_INSTANCES = (
                 {% endif %}
                 <description>Primary network interface</description>
                 <ownerId>"""
-    + ACCOUNT_ID
+    + get_account_id()
     + """</ownerId>
                 <status>in-use</status>
                 <macAddress>1b:2b:3c:4d:5e:6f</macAddress>
@@ -496,7 +497,7 @@ EC2_RUN_INSTANCES = (
                   <association>
                     <publicIp>{{ nic.public_ip }}</publicIp>
                     <ipOwnerId>"""
-    + ACCOUNT_ID
+    + get_account_id()
     + """</ipOwnerId>
                   </association>
                 {% endif %}
@@ -508,7 +509,7 @@ EC2_RUN_INSTANCES = (
                       <association>
                         <publicIp>{{ nic.public_ip }}</publicIp>
                         <ipOwnerId>"""
-    + ACCOUNT_ID
+    + get_account_id()
     + """</ipOwnerId>
                       </association>
                     {% endif %}
@@ -531,7 +532,7 @@ EC2_DESCRIBE_INSTANCES = (
           <item>
             <reservationId>{{ reservation.id }}</reservationId>
             <ownerId>"""
-    + ACCOUNT_ID
+    + get_account_id()
     + """</ownerId>
             <groupSet>
               {% for group in reservation.dynamic_group_list %}
@@ -629,7 +630,7 @@ EC2_DESCRIBE_INSTANCES = (
                     </blockDeviceMapping>
                     <virtualizationType>{{ instance.virtualization_type }}</virtualizationType>
                     <clientToken>ABCDE"""
-    + ACCOUNT_ID
+    + get_account_id()
     + """3</clientToken>
                     {% if instance.get_tags() %}
                     <tagSet>
@@ -654,7 +655,7 @@ EC2_DESCRIBE_INSTANCES = (
                           {% endif %}
                           <description>Primary network interface</description>
                           <ownerId>"""
-    + ACCOUNT_ID
+    + get_account_id()
     + """</ownerId>
                           <status>in-use</status>
                           <macAddress>1b:2b:3c:4d:5e:6f</macAddress>
@@ -683,7 +684,7 @@ EC2_DESCRIBE_INSTANCES = (
                             <association>
                               <publicIp>{{ nic.public_ip }}</publicIp>
                               <ipOwnerId>"""
-    + ACCOUNT_ID
+    + get_account_id()
     + """</ipOwnerId>
                             </association>
                           {% endif %}
@@ -695,7 +696,7 @@ EC2_DESCRIBE_INSTANCES = (
                                 <association>
                                   <publicIp>{{ nic.public_ip }}</publicIp>
                                   <ipOwnerId>"""
-    + ACCOUNT_ID
+    + get_account_id()
     + """</ipOwnerId>
                                 </association>
                               {% endif %}

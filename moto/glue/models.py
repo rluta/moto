@@ -4,6 +4,8 @@ from datetime import datetime
 import pytz
 
 from moto.core import BaseBackend, BaseModel
+from moto.core.models import get_account_id
+from moto.core.utils import BackendDict
 from moto.glue.exceptions import CrawlerRunningException, CrawlerNotRunningException
 from .exceptions import (
     JsonRESTError,
@@ -16,12 +18,22 @@ from .exceptions import (
     PartitionAlreadyExistsException,
     PartitionNotFoundException,
     VersionNotFoundException,
+    JobNotFoundException,
+    ConcurrentRunsExceededException,
 )
+from .utils import PartitionFilter
 from ..utilities.paginator import paginate
+from ..utilities.tagging_service import TaggingService
 
 
 class GlueBackend(BaseBackend):
     PAGINATION_MODEL = {
+        "list_crawlers": {
+            "input_token": "next_token",
+            "limit_key": "max_results",
+            "limit_default": 100,
+            "unique_attribute": "name",
+        },
         "list_jobs": {
             "input_token": "next_token",
             "limit_key": "max_results",
@@ -30,10 +42,13 @@ class GlueBackend(BaseBackend):
         },
     }
 
-    def __init__(self):
+    def __init__(self, region_name, account_id):
+        super().__init__(region_name, account_id)
         self.databases = OrderedDict()
         self.crawlers = OrderedDict()
         self.jobs = OrderedDict()
+        self.job_runs = OrderedDict()
+        self.tagger = TaggingService()
 
     @staticmethod
     def default_vpc_endpoint_service(service_region, zones):
@@ -128,6 +143,7 @@ class GlueBackend(BaseBackend):
             configuration=configuration,
             crawler_security_configuration=crawler_security_configuration,
             tags=tags,
+            backend=self,
         )
         self.crawlers[name] = crawler
 
@@ -139,6 +155,10 @@ class GlueBackend(BaseBackend):
 
     def get_crawlers(self):
         return [self.crawlers[key] for key in self.crawlers] if self.crawlers else []
+
+    @paginate(pagination_model=PAGINATION_MODEL)
+    def list_crawlers(self):
+        return [crawler for _, crawler in self.crawlers.items()]
 
     def start_crawler(self, name):
         crawler = self.get_crawler(name)
@@ -196,12 +216,37 @@ class GlueBackend(BaseBackend):
             glue_version,
             number_of_workers,
             worker_type,
+            backend=self,
         )
         return name
+
+    def get_job(self, name):
+        try:
+            return self.jobs[name]
+        except KeyError:
+            raise JobNotFoundException(name)
+
+    def start_job_run(self, name):
+        job = self.get_job(name)
+        return job.start_job_run()
+
+    def get_job_run(self, name, run_id):
+        job = self.get_job(name)
+        return job.get_job_run(run_id)
 
     @paginate(pagination_model=PAGINATION_MODEL)
     def list_jobs(self):
         return [job for _, job in self.jobs.items()]
+
+    def get_tags(self, resource_id):
+        return self.tagger.get_tag_dict_for_resource(resource_id)
+
+    def tag_resource(self, resource_arn, tags):
+        tags = TaggingService.convert_dict_to_tags_input(tags or {})
+        self.tagger.tag_resource(resource_arn, tags)
+
+    def untag_resource(self, resource_arn, tag_keys):
+        self.tagger.untag_resource_using_names(resource_arn, tag_keys)
 
 
 class FakeDatabase(BaseModel):
@@ -262,8 +307,19 @@ class FakeTable(BaseModel):
             raise PartitionAlreadyExistsException()
         self.partitions[str(partition.values)] = partition
 
-    def get_partitions(self):
-        return [p for str_part_values, p in self.partitions.items()]
+    def get_partitions(self, expression):
+        """See https://docs.aws.amazon.com/glue/latest/webapi/API_GetPartitions.html
+        for supported expressions.
+
+        Expression caveats:
+
+        - Column names must consist of UPPERCASE, lowercase, dots and underscores only.
+        - Nanosecond expressions on timestamp columns are rounded to microseconds.
+        - Literal dates and timestamps must be valid, i.e. no support for February 31st.
+        - LIKE expressions are converted to Python regexes, escaping special characters.
+          Only % and _ wildcards are supported, and SQL escaping using [] does not work.
+        """
+        return list(filter(PartitionFilter(expression, self), self.partitions.values()))
 
     def get_partition(self, values):
         try:
@@ -330,6 +386,7 @@ class FakeCrawler(BaseModel):
         configuration,
         crawler_security_configuration,
         tags,
+        backend,
     ):
         self.name = name
         self.role = role
@@ -344,13 +401,18 @@ class FakeCrawler(BaseModel):
         self.lineage_configuration = lineage_configuration
         self.configuration = configuration
         self.crawler_security_configuration = crawler_security_configuration
-        self.tags = tags
         self.state = "READY"
         self.creation_time = datetime.utcnow()
         self.last_updated = self.creation_time
         self.version = 1
         self.crawl_elapsed_time = 0
         self.last_crawl_info = None
+        self.arn = f"arn:aws:glue:us-east-1:{get_account_id()}:crawler/{self.name}"
+        self.backend = backend
+        self.backend.tag_resource(self.arn, tags)
+
+    def get_name(self):
+        return self.name
 
     def as_dict(self):
         last_crawl = self.last_crawl_info.as_dict() if self.last_crawl_info else None
@@ -445,6 +507,7 @@ class FakeJob:
         glue_version=None,
         number_of_workers=None,
         worker_type=None,
+        backend=None,
     ):
         self.name = name
         self.description = description
@@ -458,18 +521,113 @@ class FakeJob:
         self.max_retries = max_retries
         self.allocated_capacity = allocated_capacity
         self.timeout = timeout
+        self.state = "READY"
         self.max_capacity = max_capacity
         self.security_configuration = security_configuration
-        self.tags = tags
         self.notification_property = notification_property
         self.glue_version = glue_version
         self.number_of_workers = number_of_workers
         self.worker_type = worker_type
         self.created_on = datetime.utcnow()
         self.last_modified_on = datetime.utcnow()
+        self.arn = f"arn:aws:glue:us-east-1:{get_account_id()}:job/{self.name}"
+        self.backend = backend
+        self.backend.tag_resource(self.arn, tags)
 
     def get_name(self):
         return self.name
 
+    def as_dict(self):
+        return {
+            "Name": self.name,
+            "Description": self.description,
+            "LogUri": self.log_uri,
+            "Role": self.role,
+            "CreatedOn": self.created_on.isoformat(),
+            "LastModifiedOn": self.last_modified_on.isoformat(),
+            "ExecutionProperty": self.execution_property,
+            "Command": self.command,
+            "DefaultArguments": self.default_arguments,
+            "NonOverridableArguments": self.non_overridable_arguments,
+            "Connections": self.connections,
+            "MaxRetries": self.max_retries,
+            "AllocatedCapacity": self.allocated_capacity,
+            "Timeout": self.timeout,
+            "MaxCapacity": self.max_capacity,
+            "WorkerType": self.worker_type,
+            "NumberOfWorkers": self.number_of_workers,
+            "SecurityConfiguration": self.security_configuration,
+            "NotificationProperty": self.notification_property,
+            "GlueVersion": self.glue_version,
+        }
 
-glue_backend = GlueBackend()
+    def start_job_run(self):
+        if self.state == "RUNNING":
+            raise ConcurrentRunsExceededException(
+                f"Job with name {self.name} already running"
+            )
+        fake_job_run = FakeJobRun(job_name=self.name)
+        self.state = "RUNNING"
+        return fake_job_run.job_run_id
+
+    def get_job_run(self, run_id):
+        fake_job_run = FakeJobRun(job_name=self.name, job_run_id=run_id)
+        return fake_job_run
+
+
+class FakeJobRun:
+    def __init__(
+        self,
+        job_name: int,
+        job_run_id: str = "01",
+        arguments: dict = None,
+        allocated_capacity: int = None,
+        timeout: int = None,
+        worker_type: str = "Standard",
+    ):
+        self.job_name = job_name
+        self.job_run_id = job_run_id
+        self.arguments = arguments
+        self.allocated_capacity = allocated_capacity
+        self.timeout = timeout
+        self.worker_type = worker_type
+        self.started_on = datetime.utcnow()
+        self.modified_on = datetime.utcnow()
+        self.completed_on = datetime.utcnow()
+
+    def get_name(self):
+        return self.job_name
+
+    def as_dict(self):
+        return {
+            "Id": self.job_run_id,
+            "Attempt": 1,
+            "PreviousRunId": "01",
+            "TriggerName": "test_trigger",
+            "JobName": self.job_name,
+            "StartedOn": self.started_on.isoformat(),
+            "LastModifiedOn": self.modified_on.isoformat(),
+            "CompletedOn": self.completed_on.isoformat(),
+            "JobRunState": "SUCCEEDED",
+            "Arguments": self.arguments or {"runSpark": "spark -f test_file.py"},
+            "ErrorMessage": "",
+            "PredecessorRuns": [
+                {"JobName": "string", "RunId": "string"},
+            ],
+            "AllocatedCapacity": self.allocated_capacity or 123,
+            "ExecutionTime": 123,
+            "Timeout": self.timeout or 123,
+            "MaxCapacity": 123.0,
+            "WorkerType": self.worker_type,
+            "NumberOfWorkers": 123,
+            "SecurityConfiguration": "string",
+            "LogGroupName": "test/log",
+            "NotificationProperty": {"NotifyDelayAfter": 123},
+            "GlueVersion": "0.9",
+        }
+
+
+glue_backends = BackendDict(
+    GlueBackend, "glue", use_boto3_regions=False, additional_regions=["global"]
+)
+glue_backend = glue_backends["global"]

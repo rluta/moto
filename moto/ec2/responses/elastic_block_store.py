@@ -1,8 +1,7 @@
-from moto.core.responses import BaseResponse
-from moto.ec2.utils import filters_from_querystring
+from ._base_response import EC2BaseResponse
 
 
-class ElasticBlockStore(BaseResponse):
+class ElasticBlockStore(EC2BaseResponse):
     def attach_volume(self):
         volume_id = self._get_param("VolumeId")
         instance_id = self._get_param("InstanceId")
@@ -18,7 +17,7 @@ class ElasticBlockStore(BaseResponse):
         source_snapshot_id = self._get_param("SourceSnapshotId")
         source_region = self._get_param("SourceRegion")
         description = self._get_param("Description")
-        tags = self._parse_tag_specification("TagSpecification")
+        tags = self._parse_tag_specification()
         snapshot_tags = tags.get("snapshot", {})
         if self.is_not_dryrun("CopySnapshot"):
             snapshot = self.ec2_backend.copy_snapshot(
@@ -31,7 +30,7 @@ class ElasticBlockStore(BaseResponse):
     def create_snapshot(self):
         volume_id = self._get_param("VolumeId")
         description = self._get_param("Description")
-        tags = self._parse_tag_specification("TagSpecification")
+        tags = self._parse_tag_specification()
         snapshot_tags = tags.get("snapshot", {})
         if self.is_not_dryrun("CreateSnapshot"):
             snapshot = self.ec2_backend.create_snapshot(volume_id, description)
@@ -43,7 +42,7 @@ class ElasticBlockStore(BaseResponse):
         params = self._get_params()
         instance_spec = params.get("InstanceSpecification")
         description = params.get("Description", "")
-        tags = self._parse_tag_specification("TagSpecification")
+        tags = self._parse_tag_specification()
         snapshot_tags = tags.get("snapshot", {})
 
         if self.is_not_dryrun("CreateSnapshots"):
@@ -58,7 +57,7 @@ class ElasticBlockStore(BaseResponse):
         zone = self._get_param("AvailabilityZone")
         snapshot_id = self._get_param("SnapshotId")
         volume_type = self._get_param("VolumeType")
-        tags = self._parse_tag_specification("TagSpecification")
+        tags = self._parse_tag_specification()
         volume_tags = tags.get("volume", {})
         encrypted = self._get_bool_param("Encrypted", if_none=False)
         kms_key_id = self._get_param("KmsKeyId")
@@ -88,7 +87,7 @@ class ElasticBlockStore(BaseResponse):
             return DELETE_VOLUME_RESPONSE
 
     def describe_snapshots(self):
-        filters = filters_from_querystring(self.querystring)
+        filters = self._filters_from_querystring()
         snapshot_ids = self._get_multi_param("SnapshotId")
         snapshots = self.ec2_backend.describe_snapshots(
             snapshot_ids=snapshot_ids, filters=filters
@@ -97,7 +96,7 @@ class ElasticBlockStore(BaseResponse):
         return template.render(snapshots=snapshots)
 
     def describe_volumes(self):
-        filters = filters_from_querystring(self.querystring)
+        filters = self._filters_from_querystring()
         volume_ids = self._get_multi_param("VolumeId")
         volumes = self.ec2_backend.describe_volumes(
             volume_ids=volume_ids, filters=filters

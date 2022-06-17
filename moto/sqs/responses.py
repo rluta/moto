@@ -12,7 +12,6 @@ from urllib.parse import urlparse
 
 from .exceptions import (
     EmptyBatchRequest,
-    InvalidAddress,
     InvalidAttributeName,
     ReceiptHandleIsInvalid,
     BatchEntryIdsNotDistinct,
@@ -53,7 +52,8 @@ class SQSResponse(BaseResponse):
             if queue_url.startswith("http://") or queue_url.startswith("https://"):
                 return queue_url.split("/")[-1]
             else:
-                raise InvalidAddress(queue_url)
+                # The parameter could be the name itself, which AWS also accepts
+                return queue_url
         except TypeError:
             # Fallback to reading from the URL for botocore
             return self.path.split("/")[-1]
@@ -423,7 +423,7 @@ class SQSResponse(BaseResponse):
         except ValueError:
             return ERROR_MAX_VISIBILITY_TIMEOUT_RESPONSE, dict(status=400)
 
-        messages = self.sqs_backend.receive_messages(
+        messages = self.sqs_backend.receive_message(
             queue_name, message_count, wait_time, visibility_timeout, message_attributes
         )
 

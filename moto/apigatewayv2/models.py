@@ -66,7 +66,7 @@ class Authorizer(BaseModel):
         if auth_result_ttl is not None:
             self.auth_result_ttl = auth_result_ttl
         if authorizer_type is not None:
-            self.authorizer_type is authorizer_type
+            self.authorizer_type = authorizer_type
         if authorizer_uri is not None:
             self.authorizer_uri = authorizer_uri
         if enable_simple_response is not None:
@@ -980,17 +980,11 @@ class VpcLink(BaseModel):
 class ApiGatewayV2Backend(BaseBackend):
     """Implementation of ApiGatewayV2 APIs."""
 
-    def __init__(self, region_name=None):
-        self.region_name = region_name
+    def __init__(self, region_name, account_id):
+        super().__init__(region_name, account_id)
         self.apis = dict()
         self.vpc_links = dict()
         self.tagger = TaggingService()
-
-    def reset(self):
-        """Re-initialize all attributes for this instance."""
-        region_name = self.region_name
-        self.__dict__ = {}
-        self.__init__(region_name)
 
     def create_api(
         self,

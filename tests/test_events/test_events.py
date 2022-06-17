@@ -62,7 +62,7 @@ def get_random_rule():
     return RULES[random.randint(0, len(RULES) - 1)]
 
 
-def generate_environment():
+def generate_environment(add_targets=True):
     client = boto3.client("events", "us-west-2")
 
     for rule in RULES:
@@ -73,12 +73,13 @@ def generate_environment():
             Tags=rule.get("Tags", []),
         )
 
-        targets = []
-        for target in TARGETS:
-            if rule["Name"] in TARGETS[target].get("Rules"):
-                targets.append({"Id": target, "Arn": TARGETS[target]["Arn"]})
+        if add_targets:
+            targets = []
+            for target in TARGETS:
+                if rule["Name"] in TARGETS[target].get("Rules"):
+                    targets.append({"Id": target, "Arn": TARGETS[target]["Arn"]})
 
-        client.put_targets(Rule=rule["Name"], Targets=targets)
+            client.put_targets(Rule=rule["Name"], Targets=targets)
 
     return client
 
@@ -249,7 +250,7 @@ def test_enable_disable_rule():
         client.enable_rule(Name="junk")
 
     err = ex.value.response["Error"]
-    err["Code"] == "ResourceNotFoundException"
+    err["Code"].should.equal("ResourceNotFoundException")
 
 
 @mock_events
@@ -298,11 +299,30 @@ def test_list_rule_names_by_target_using_limit():
 
 @mock_events
 def test_delete_rule():
-    client = generate_environment()
+    client = generate_environment(add_targets=False)
 
     client.delete_rule(Name=RULES[0]["Name"])
     rules = client.list_rules()
     assert len(rules["Rules"]) == len(RULES) - 1
+
+
+@mock_events
+def test_delete_rule_with_targets():
+    # given
+    client = generate_environment()
+
+    # when
+    with pytest.raises(ClientError) as e:
+        client.delete_rule(Name=RULES[0]["Name"])
+
+    # then
+    ex = e.value
+    ex.operation_name.should.equal("DeleteRule")
+    ex.response["ResponseMetadata"]["HTTPStatusCode"].should.equal(400)
+    ex.response["Error"]["Code"].should.contain("ValidationException")
+    ex.response["Error"]["Message"].should.equal(
+        "Rule can't be deleted since it has targets."
+    )
 
 
 @mock_events
@@ -940,7 +960,7 @@ def test_create_rule_with_tags():
 
 @mock_events
 def test_delete_rule_with_tags():
-    client = generate_environment()
+    client = generate_environment(add_targets=False)
     rule_name = "test2"
     rule_arn = client.describe_rule(Name=rule_name).get("Arn")
     client.delete_rule(Name=rule_name)
@@ -2227,14 +2247,14 @@ def test_start_replay_send_to_log_group():
     )
     event_original = json.loads(events[0]["message"])
     event_original["version"].should.equal("0")
-    event_original["id"].should_not.be.empty
+    event_original["id"].should_not.equal(None)
     event_original["detail-type"].should.equal("type")
     event_original["source"].should.equal("source")
     event_original["time"].should.equal(
         iso_8601_datetime_without_milliseconds(event_time)
     )
     event_original["region"].should.equal("eu-central-1")
-    event_original["resources"].should.be.empty
+    event_original["resources"].should.equal([])
     event_original["detail"].should.equal({"key": "value"})
     event_original.should_not.have.key("replay-name")
 
@@ -2245,7 +2265,7 @@ def test_start_replay_send_to_log_group():
     event_replay["source"].should.equal("source")
     event_replay["time"].should.equal(event_original["time"])
     event_replay["region"].should.equal("eu-central-1")
-    event_replay["resources"].should.be.empty
+    event_replay["resources"].should.equal([])
     event_replay["detail"].should.equal({"key": "value"})
     event_replay["replay-name"].should.equal("test-replay")
 

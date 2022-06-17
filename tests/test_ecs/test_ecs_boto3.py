@@ -40,6 +40,20 @@ def test_create_cluster():
 
 
 @mock_ecs
+def test_create_cluster_with_setting():
+    client = boto3.client("ecs", region_name="us-east-1")
+    cluster = client.create_cluster(
+        clusterName="test_ecs_cluster",
+        settings=[{"name": "containerInsights", "value": "disabled"}],
+    )["cluster"]
+    cluster["clusterName"].should.equal("test_ecs_cluster")
+    cluster["status"].should.equal("ACTIVE")
+    cluster.should.have.key("settings").equals(
+        [{"name": "containerInsights", "value": "disabled"}]
+    )
+
+
+@mock_ecs
 def test_list_clusters():
     client = boto3.client("ecs", region_name="us-east-2")
     _ = client.create_cluster(clusterName="test_cluster0")
@@ -112,7 +126,7 @@ def test_delete_cluster():
     response["cluster"]["activeServicesCount"].should.equal(0)
 
     response = client.list_clusters()
-    len(response["clusterArns"]).should.equal(0)
+    response["clusterArns"].should.have.length_of(0)
 
 
 @mock_ecs
@@ -627,7 +641,8 @@ def test_create_service_scheduling_strategy():
 @mock_ecs
 def test_list_services():
     client = boto3.client("ecs", region_name="us-east-1")
-    _ = client.create_cluster(clusterName="test_ecs_cluster")
+    _ = client.create_cluster(clusterName="test_ecs_cluster1")
+    _ = client.create_cluster(clusterName="test_ecs_cluster2")
     _ = client.register_task_definition(
         family="test_ecs_task",
         containerDefinitions=[
@@ -645,47 +660,65 @@ def test_list_services():
         ],
     )
     _ = client.create_service(
-        cluster="test_ecs_cluster",
+        cluster="test_ecs_cluster1",
         serviceName="test_ecs_service1",
         taskDefinition="test_ecs_task",
         schedulingStrategy="REPLICA",
+        launchType="EC2",
         desiredCount=2,
     )
     _ = client.create_service(
-        cluster="test_ecs_cluster",
+        cluster="test_ecs_cluster1",
         serviceName="test_ecs_service2",
         taskDefinition="test_ecs_task",
         schedulingStrategy="DAEMON",
+        launchType="FARGATE",
         desiredCount=2,
     )
-    unfiltered_response = client.list_services(cluster="test_ecs_cluster")
-    len(unfiltered_response["serviceArns"]).should.equal(2)
-    unfiltered_response["serviceArns"][0].should.equal(
-        "arn:aws:ecs:us-east-1:{}:service/test_ecs_cluster/test_ecs_service1".format(
+    _ = client.create_service(
+        cluster="test_ecs_cluster2",
+        serviceName="test_ecs_service3",
+        taskDefinition="test_ecs_task",
+        schedulingStrategy="REPLICA",
+        launchType="FARGATE",
+        desiredCount=2,
+    )
+
+    test_ecs_service1_arn = (
+        "arn:aws:ecs:us-east-1:{}:service/test_ecs_cluster1/test_ecs_service1".format(
             ACCOUNT_ID
         )
     )
-    unfiltered_response["serviceArns"][1].should.equal(
-        "arn:aws:ecs:us-east-1:{}:service/test_ecs_cluster/test_ecs_service2".format(
+    test_ecs_service2_arn = (
+        "arn:aws:ecs:us-east-1:{}:service/test_ecs_cluster1/test_ecs_service2".format(
             ACCOUNT_ID
         )
     )
 
-    filtered_response = client.list_services(
-        cluster="test_ecs_cluster", schedulingStrategy="REPLICA"
+    cluster1_services = client.list_services(cluster="test_ecs_cluster1")
+    len(cluster1_services["serviceArns"]).should.equal(2)
+    cluster1_services["serviceArns"][0].should.equal(test_ecs_service1_arn)
+    cluster1_services["serviceArns"][1].should.equal(test_ecs_service2_arn)
+
+    cluster1_replica_services = client.list_services(
+        cluster="test_ecs_cluster1", schedulingStrategy="REPLICA"
     )
-    len(filtered_response["serviceArns"]).should.equal(1)
-    filtered_response["serviceArns"][0].should.equal(
-        "arn:aws:ecs:us-east-1:{}:service/test_ecs_cluster/test_ecs_service1".format(
-            ACCOUNT_ID
-        )
+    len(cluster1_replica_services["serviceArns"]).should.equal(1)
+    cluster1_replica_services["serviceArns"][0].should.equal(test_ecs_service1_arn)
+
+    cluster1_fargate_services = client.list_services(
+        cluster="test_ecs_cluster1", launchType="FARGATE"
     )
+    len(cluster1_fargate_services["serviceArns"]).should.equal(1)
+    cluster1_fargate_services["serviceArns"][0].should.equal(test_ecs_service2_arn)
 
 
 @mock_ecs
 def test_describe_services():
     client = boto3.client("ecs", region_name="us-east-1")
-    _ = client.create_cluster(clusterName="test_ecs_cluster")
+    cluster_arn = client.create_cluster(clusterName="test_ecs_cluster")["cluster"][
+        "clusterArn"
+    ]
     _ = client.register_task_definition(
         family="test_ecs_task",
         containerDefinitions=[
@@ -721,6 +754,14 @@ def test_describe_services():
         taskDefinition="test_ecs_task",
         desiredCount=2,
     )
+
+    # Verify we can describe services using the cluster ARN
+    response = client.describe_services(
+        cluster=cluster_arn, services=["test_ecs_service1"]
+    )
+    response.should.have.key("services").length_of(1)
+
+    # Verify we can describe services using both names and ARN's
     response = client.describe_services(
         cluster="test_ecs_cluster",
         services=[
@@ -1069,6 +1110,43 @@ def test_delete_service():
     response["service"]["schedulingStrategy"].should.equal("REPLICA")
     response["service"]["taskDefinition"].should.equal(
         "arn:aws:ecs:us-east-1:{}:task-definition/test_ecs_task:1".format(ACCOUNT_ID)
+    )
+
+
+@mock_ecs
+def test_delete_service__using_arns():
+    client = boto3.client("ecs", region_name="us-east-1")
+    cluster_arn = client.create_cluster(clusterName="test_ecs_cluster")["cluster"][
+        "clusterArn"
+    ]
+    _ = client.register_task_definition(
+        family="test_ecs_task",
+        containerDefinitions=[
+            {
+                "name": "hello_world",
+                "image": "docker/hello-world:latest",
+                "cpu": 1024,
+                "memory": 400,
+                "essential": True,
+                "environment": [
+                    {"name": "AWS_ACCESS_KEY_ID", "value": "SOME_ACCESS_KEY"}
+                ],
+                "logConfiguration": {"logDriver": "json-file"},
+            }
+        ],
+    )
+    service_arn = client.create_service(
+        cluster="test_ecs_cluster",
+        serviceName="test_ecs_service",
+        taskDefinition="test_ecs_task",
+        desiredCount=2,
+    )["service"]["serviceArn"]
+    _ = client.update_service(
+        cluster="test_ecs_cluster", service="test_ecs_service", desiredCount=0
+    )
+    response = client.delete_service(cluster=cluster_arn, service=service_arn)
+    response["service"]["clusterArn"].should.equal(
+        "arn:aws:ecs:us-east-1:{}:cluster/test_ecs_cluster".format(ACCOUNT_ID)
     )
 
 

@@ -1,6 +1,5 @@
 import re
 import sys
-from os import environ
 from ipaddress import IPv4Network
 
 import boto3
@@ -38,12 +37,12 @@ else:
 
 
 @pytest.fixture(scope="function")
-def aws_credentials():
+def aws_credentials(monkeypatch):
     """Mocked AWS Credentials for moto."""
-    environ["AWS_ACCESS_KEY_ID"] = "testing"
-    environ["AWS_SECRET_ACCESS_KEY"] = "testing"
-    environ["AWS_SECURITY_TOKEN"] = "testing"
-    environ["AWS_SESSION_TOKEN"] = "testing"
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_SECURITY_TOKEN", "testing")
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
 
 
 @pytest.fixture(scope="function")
@@ -143,7 +142,7 @@ def test_create_mount_target_invalid_file_system_id(efs, subnet):
         efs.create_mount_target(FileSystemId="fs-12343289", SubnetId=subnet["SubnetId"])
     resp = exc_info.value.response
     assert has_status_code(resp, 404)
-    assert "FileSystemNotFound" in resp["Error"]["Message"]
+    assert "FileSystemNotFound" == resp["Error"]["Code"]
 
 
 def test_create_mount_target_invalid_subnet_id(efs, file_system):
@@ -153,7 +152,7 @@ def test_create_mount_target_invalid_subnet_id(efs, file_system):
         )
     resp = exc_info.value.response
     assert has_status_code(resp, 404)
-    assert "SubnetNotFound" in resp["Error"]["Message"]
+    assert "SubnetNotFound" == resp["Error"]["Code"]
 
 
 def test_create_mount_target_invalid_sg_id(efs, file_system, subnet):
@@ -165,7 +164,7 @@ def test_create_mount_target_invalid_sg_id(efs, file_system, subnet):
         )
     resp = exc_info.value.response
     assert has_status_code(resp, 404)
-    assert "SecurityGroupNotFound" in resp["Error"]["Message"]
+    assert "SecurityGroupNotFound" == resp["Error"]["Code"]
 
 
 def test_create_second_mount_target_wrong_vpc(efs, ec2, file_system, subnet):
@@ -183,7 +182,7 @@ def test_create_second_mount_target_wrong_vpc(efs, ec2, file_system, subnet):
         )
     resp = exc_info.value.response
     assert has_status_code(resp, 409)
-    assert "MountTargetConflict" in resp["Error"]["Message"]
+    assert "MountTargetConflict" == resp["Error"]["Code"]
     assert "VPC" in resp["Error"]["Message"]
 
 
@@ -197,7 +196,7 @@ def test_create_mount_target_duplicate_subnet_id(efs, file_system, subnet):
         )
     resp = exc_info.value.response
     assert has_status_code(resp, 409)
-    assert "MountTargetConflict" in resp["Error"]["Message"]
+    assert "MountTargetConflict" == resp["Error"]["Code"]
     assert "AZ" in resp["Error"]["Message"]
 
 
@@ -217,7 +216,7 @@ def test_create_mount_target_subnets_in_same_zone(efs, ec2, file_system, subnet)
         )
     resp = exc_info.value.response
     assert has_status_code(resp, 409)
-    assert "MountTargetConflict" in resp["Error"]["Message"]
+    assert "MountTargetConflict" == resp["Error"]["Code"]
     assert "AZ" in resp["Error"]["Message"]
 
 
@@ -230,7 +229,7 @@ def test_create_mount_target_ip_address_out_of_range(efs, file_system, subnet):
         )
     resp = exc_info.value.response
     assert has_status_code(resp, 400)
-    assert "BadRequest" in resp["Error"]["Message"]
+    assert "BadRequest" == resp["Error"]["Code"]
     assert "Address" in resp["Error"]["Message"]
 
 
@@ -251,7 +250,7 @@ def test_create_mount_target_too_many_security_groups(efs, ec2, file_system, sub
         )
     resp = exc_info.value.response
     assert has_status_code(resp, 400)
-    assert "SecurityGroupLimitExceeded" in resp["Error"]["Message"]
+    assert "SecurityGroupLimitExceeded" == resp["Error"]["Code"]
 
 
 def test_delete_file_system_mount_targets_attached(
@@ -264,7 +263,7 @@ def test_delete_file_system_mount_targets_attached(
         efs.delete_file_system(FileSystemId=file_system["FileSystemId"])
     resp = exc_info.value.response
     assert has_status_code(resp, 409)
-    assert "FileSystemInUse" in resp["Error"]["Message"]
+    assert "FileSystemInUse" == resp["Error"]["Code"]
 
 
 def test_describe_mount_targets_minimal_case(
@@ -288,6 +287,29 @@ def test_describe_mount_targets_minimal_case(
 
     # Pop out the timestamps and see if the rest of the description is the same.
     assert mount_target == create_resp
+
+
+def test_describe_mount_targets__by_access_point_id(
+    efs, ec2, file_system, subnet
+):  # pylint: disable=unused-argument
+    create_resp = efs.create_mount_target(
+        FileSystemId=file_system["FileSystemId"], SubnetId=subnet["SubnetId"]
+    )
+    create_resp.pop("ResponseMetadata")
+
+    ap_resp = efs.create_access_point(
+        ClientToken="ct1", FileSystemId=file_system["FileSystemId"]
+    )
+    access_point_id = ap_resp["AccessPointId"]
+
+    # Describe the mount targets
+    ap_resp = efs.describe_mount_targets(AccessPointId=access_point_id)
+
+    # Check the list results.
+    ap_resp.should.have.key("MountTargets").length_of(1)
+    ap_resp["MountTargets"][0]["MountTargetId"].should.equal(
+        create_resp["MountTargetId"]
+    )
 
 
 def test_describe_mount_targets_paging(efs, ec2, file_system):
@@ -358,7 +380,7 @@ def test_describe_mount_targets_invalid_file_system_id(efs):
         efs.describe_mount_targets(FileSystemId="fs-12343289")
     resp = exc_info.value.response
     assert has_status_code(resp, 404)
-    assert "FileSystemNotFound" in resp["Error"]["Message"]
+    assert "FileSystemNotFound" == resp["Error"]["Code"]
 
 
 def test_describe_mount_targets_invalid_mount_target_id(efs):
@@ -366,7 +388,7 @@ def test_describe_mount_targets_invalid_mount_target_id(efs):
         efs.describe_mount_targets(MountTargetId="fsmt-ad9f8987")
     resp = exc_info.value.response
     assert has_status_code(resp, 404)
-    assert "MountTargetNotFound" in resp["Error"]["Message"]
+    assert "MountTargetNotFound" == resp["Error"]["Code"]
 
 
 def test_describe_mount_targets_no_id_given(efs):
@@ -374,7 +396,7 @@ def test_describe_mount_targets_no_id_given(efs):
         efs.describe_mount_targets()
     resp = exc_info.value.response
     assert has_status_code(resp, 400)
-    assert "BadRequest" in resp["Error"]["Message"]
+    assert "BadRequest" == resp["Error"]["Code"]
 
 
 def test_delete_mount_target_minimal_case(efs, file_system, subnet):
@@ -392,4 +414,4 @@ def test_delete_mount_target_invalid_mount_target_id(efs):
         efs.delete_mount_target(MountTargetId="fsmt-98487aef0a7")
     resp = exc_info.value.response
     assert has_status_code(resp, 404)
-    assert "MountTargetNotFound" in resp["Error"]["Message"]
+    assert "MountTargetNotFound" == resp["Error"]["Code"]

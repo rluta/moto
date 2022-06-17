@@ -8,7 +8,7 @@ from collections import defaultdict
 from jinja2 import Template
 from re import compile as re_compile
 from collections import OrderedDict
-from moto.core import BaseBackend, BaseModel, CloudFormationModel, ACCOUNT_ID
+from moto.core import BaseBackend, BaseModel, CloudFormationModel, get_account_id
 
 from moto.core.utils import iso_8601_datetime_with_milliseconds, BackendDict
 from moto.ec2.models import ec2_backends
@@ -52,7 +52,7 @@ class Cluster:
         self.engine_mode = kwargs.get("engine_mode") or "provisioned"
         self.iops = kwargs.get("iops")
         self.status = "active"
-        self.region = kwargs.get("region")
+        self.region_name = kwargs.get("region")
         self.cluster_create_time = iso_8601_datetime_with_milliseconds(
             datetime.datetime.now()
         )
@@ -84,9 +84,9 @@ class Cluster:
         self.availability_zones = kwargs.get("availability_zones")
         if not self.availability_zones:
             self.availability_zones = [
-                f"{self.region}a",
-                f"{self.region}b",
-                f"{self.region}c",
+                f"{self.region_name}a",
+                f"{self.region_name}b",
+                f"{self.region_name}c",
             ]
         self.parameter_group = kwargs.get("parameter_group") or "default.aurora8.0"
         self.subnet_group = "default"
@@ -94,8 +94,8 @@ class Cluster:
         self.url_identifier = "".join(
             random.choice(string.ascii_lowercase + string.digits) for _ in range(12)
         )
-        self.endpoint = f"{self.db_cluster_identifier}.cluster-{self.url_identifier}.{self.region}.rds.amazonaws.com"
-        self.reader_endpoint = f"{self.db_cluster_identifier}.cluster-ro-{self.url_identifier}.{self.region}.rds.amazonaws.com"
+        self.endpoint = f"{self.db_cluster_identifier}.cluster-{self.url_identifier}.{self.region_name}.rds.amazonaws.com"
+        self.reader_endpoint = f"{self.db_cluster_identifier}.cluster-ro-{self.url_identifier}.{self.region_name}.rds.amazonaws.com"
         self.port = kwargs.get("port")
         if self.port is None:
             self.port = Cluster.default_port(self.engine)
@@ -110,11 +110,14 @@ class Cluster:
             random.choice(string.ascii_uppercase + string.digits) for _ in range(26)
         )
         self.tags = kwargs.get("tags", [])
+        self.enabled_cloudwatch_logs_exports = (
+            kwargs.get("enable_cloudwatch_logs_exports") or []
+        )
 
     @property
     def db_cluster_arn(self):
         return "arn:aws:rds:{0}:{1}:cluster:{2}".format(
-            self.region, ACCOUNT_ID, self.db_cluster_identifier
+            self.region_name, get_account_id(), self.db_cluster_identifier
         )
 
     def to_xml(self):
@@ -172,6 +175,11 @@ class Cluster:
               <CopyTagsToSnapshot>{{ cluster.copy_tags_to_snapshot }}</CopyTagsToSnapshot>
               <CrossAccountClone>false</CrossAccountClone>
               <DomainMemberships></DomainMemberships>
+              <EnabledCloudwatchLogsExports>
+              {% for export in cluster.enabled_cloudwatch_logs_exports %}
+              <member>{{ export }}</member>
+              {% endfor %}
+              </EnabledCloudwatchLogsExports>
               <TagList>
               {%- for tag in cluster.tags -%}
                 <Tag>
@@ -258,7 +266,7 @@ class ClusterSnapshot(BaseModel):
     @property
     def snapshot_arn(self):
         return "arn:aws:rds:{0}:{1}:cluster-snapshot:{2}".format(
-            self.cluster.region, ACCOUNT_ID, self.snapshot_id
+            self.cluster.region_name, get_account_id(), self.snapshot_id
         )
 
     def to_xml(self):
@@ -307,7 +315,7 @@ class ClusterSnapshot(BaseModel):
 class Database(CloudFormationModel):
 
     SUPPORTED_FILTERS = {
-        "db-cluster-id": FilterDef(None, "DB Cluster Identifiers"),
+        "db-cluster-id": FilterDef(["db_cluster_identifier"], "DB Cluster Identifiers"),
         "db-instance-id": FilterDef(
             ["db_instance_arn", "db_instance_identifier"], "DB Instance Identifiers"
         ),
@@ -333,7 +341,7 @@ class Database(CloudFormationModel):
         self.status = "available"
         self.is_replica = False
         self.replicas = []
-        self.region = kwargs.get("region")
+        self.region_name = kwargs.get("region")
         self.engine = kwargs.get("engine")
         self.engine_version = kwargs.get("engine_version", None)
         if not self.engine_version and self.engine in self.default_engine_versions:
@@ -357,6 +365,7 @@ class Database(CloudFormationModel):
             self.allocated_storage = Database.default_allocated_storage(
                 engine=self.engine, storage_type=self.storage_type
             )
+        self.db_cluster_identifier = kwargs.get("db_cluster_identifier")
         self.db_instance_identifier = kwargs.get("db_instance_identifier")
         self.source_db_identifier = kwargs.get("source_db_identifier")
         self.db_instance_class = kwargs.get("db_instance_class")
@@ -381,9 +390,9 @@ class Database(CloudFormationModel):
         self.multi_az = kwargs.get("multi_az")
         self.db_subnet_group_name = kwargs.get("db_subnet_group_name")
         if self.db_subnet_group_name:
-            self.db_subnet_group = rds_backends[self.region].describe_subnet_groups(
-                self.db_subnet_group_name
-            )[0]
+            self.db_subnet_group = rds_backends[
+                self.region_name
+            ].describe_subnet_groups(self.db_subnet_group_name)[0]
         else:
             self.db_subnet_group = None
         self.security_groups = kwargs.get("security_groups", [])
@@ -396,7 +405,7 @@ class Database(CloudFormationModel):
             self.db_parameter_group_name
             and not self.is_default_parameter_group(self.db_parameter_group_name)
             and self.db_parameter_group_name
-            not in rds_backends[self.region].db_parameter_groups
+            not in rds_backends[self.region_name].db_parameter_groups
         ):
             raise DBParameterGroupNotFoundError(self.db_parameter_group_name)
 
@@ -408,7 +417,8 @@ class Database(CloudFormationModel):
         self.option_group_supplied = self.option_group_name is not None
         if (
             self.option_group_name
-            and self.option_group_name not in rds_backends[self.region].option_groups
+            and self.option_group_name
+            not in rds_backends[self.region_name].option_groups
         ):
             raise OptionGroupNotFoundFaultError(self.option_group_name)
         self.default_option_groups = {
@@ -425,11 +435,14 @@ class Database(CloudFormationModel):
         self.dbi_resource_id = "db-M5ENSHXFPU6XHZ4G4ZEI5QIO2U"
         self.tags = kwargs.get("tags", [])
         self.deletion_protection = kwargs.get("deletion_protection", False)
+        self.enabled_cloudwatch_logs_exports = (
+            kwargs.get("enable_cloudwatch_logs_exports") or []
+        )
 
     @property
     def db_instance_arn(self):
         return "arn:aws:rds:{0}:{1}:db:{2}".format(
-            self.region, ACCOUNT_ID, self.db_instance_identifier
+            self.region_name, get_account_id(), self.db_instance_identifier
         )
 
     @property
@@ -451,18 +464,18 @@ class Database(CloudFormationModel):
                     family=db_family,
                     description=description,
                     tags={},
-                    region=self.region,
+                    region=self.region_name,
                 )
             ]
         else:
             if (
                 self.db_parameter_group_name
-                not in rds_backends[self.region].db_parameter_groups
+                not in rds_backends[self.region_name].db_parameter_groups
             ):
                 raise DBParameterGroupNotFoundError(self.db_parameter_group_name)
 
             return [
-                rds_backends[self.region].db_parameter_groups[
+                rds_backends[self.region_name].db_parameter_groups[
                     self.db_parameter_group_name
                 ]
             ]
@@ -485,7 +498,7 @@ class Database(CloudFormationModel):
               <BackupRetentionPeriod>{{ database.backup_retention_period }}</BackupRetentionPeriod>
               <DBInstanceStatus>{{ database.status }}</DBInstanceStatus>
               {% if database.db_name %}<DBName>{{ database.db_name }}</DBName>{% endif %}
-              <MultiAZ>{{ database.multi_az }}</MultiAZ>
+              <MultiAZ>{{ 'true' if database.multi_az else 'false' }}</MultiAZ>
               <VpcSecurityGroups>
                 {% for vpc_security_group_id in database.vpc_security_group_ids %}
                 <VpcSecurityGroupMembership>
@@ -494,6 +507,7 @@ class Database(CloudFormationModel):
                 </VpcSecurityGroupMembership>
                 {% endfor %}
               </VpcSecurityGroups>
+              {% if database.db_cluster_identifier %}<DBClusterIdentifier>{{ database.db_cluster_identifier }}</DBClusterIdentifier>{% endif %}
               <DBInstanceIdentifier>{{ database.db_instance_identifier }}</DBInstanceIdentifier>
               <DbiResourceId>{{ database.dbi_resource_id }}</DbiResourceId>
               <InstanceCreateTime>{{ database.instance_create_time }}</InstanceCreateTime>
@@ -514,11 +528,16 @@ class Database(CloudFormationModel):
                 </DBInstanceStatusInfo>
                 {% endif %}
               </StatusInfos>
+              <EnabledCloudwatchLogsExports>
+              {% for export in database.enabled_cloudwatch_logs_exports %}
+              <member>{{ export }}</member>
+              {% endfor %}
+              </EnabledCloudwatchLogsExports>
               {% if database.is_replica %}
               <ReadReplicaSourceDBInstanceIdentifier>{{ database.source_db_identifier }}</ReadReplicaSourceDBInstanceIdentifier>
               {% endif %}
               <Engine>{{ database.engine }}</Engine>
-              <IAMDatabaseAuthenticationEnabled>{{database.enable_iam_database_authentication|lower }}</IAMDatabaseAuthenticationEnabled>
+              <IAMDatabaseAuthenticationEnabled>{{'true' if database.enable_iam_database_authentication else 'false' }}</IAMDatabaseAuthenticationEnabled>
               <LicenseModel>{{ database.license_model }}</LicenseModel>
               <EngineVersion>{{ database.engine_version }}</EngineVersion>
               <OptionGroupMemberships>
@@ -600,7 +619,7 @@ class Database(CloudFormationModel):
     @property
     def address(self):
         return "{0}.aaaaaaaaaa.{1}.rds.amazonaws.com".format(
-            self.db_instance_identifier, self.region
+            self.db_instance_identifier, self.region_name
         )
 
     def add_replica(self, replica):
@@ -728,7 +747,7 @@ class Database(CloudFormationModel):
             db_kwargs["source_db_identifier"] = source_db_identifier
             database = rds_backend.create_database_replica(db_kwargs)
         else:
-            database = rds_backend.create_database(db_kwargs)
+            database = rds_backend.create_db_instance(db_kwargs)
         return database
 
     def to_json(self):
@@ -740,6 +759,7 @@ class Database(CloudFormationModel):
         "BackupRetentionPeriod": "{{ database.backup_retention_period }}",
         "CharacterSetName": {%- if database.character_set_name -%}{{ database.character_set_name }}{%- else %} null{%- endif -%},
         "DBInstanceClass": "{{ database.db_instance_class }}",
+        {%- if database.db_cluster_identifier -%}"DBClusterIdentifier": "{{ database.db_cluster_identifier }}",{%- endif -%}
         "DBInstanceIdentifier": "{{ database.db_instance_identifier }}",
         "DBInstanceStatus": "{{ database.status }}",
         "DBName": {%- if database.db_name -%}"{{ database.db_name }}"{%- else %} null{%- endif -%},
@@ -820,7 +840,7 @@ class Database(CloudFormationModel):
 
     def delete(self, region_name):
         backend = rds_backends[region_name]
-        backend.delete_database(self.db_instance_identifier)
+        backend.delete_db_instance(self.db_instance_identifier)
 
 
 class DatabaseSnapshot(BaseModel):
@@ -846,7 +866,7 @@ class DatabaseSnapshot(BaseModel):
     @property
     def snapshot_arn(self):
         return "arn:aws:rds:{0}:{1}:snapshot:{2}".format(
-            self.database.region, ACCOUNT_ID, self.snapshot_id
+            self.database.region_name, get_account_id(), self.snapshot_id
         )
 
     def to_xml(self):
@@ -954,15 +974,15 @@ class EventSubscription(BaseModel):
         self.enabled = kwargs.get("enabled", True)
         self.tags = kwargs.get("tags", True)
 
-        self.region = ""
-        self.customer_aws_id = copy.copy(ACCOUNT_ID)
+        self.region_name = ""
+        self.customer_aws_id = copy.copy(get_account_id())
         self.status = "active"
         self.created_at = iso_8601_datetime_with_milliseconds(datetime.datetime.now())
 
     @property
     def es_arn(self):
         return "arn:aws:rds:{0}:{1}:es:{2}".format(
-            self.region, ACCOUNT_ID, self.subscription_name
+            self.region_name, get_account_id(), self.subscription_name
         )
 
     def to_xml(self):
@@ -1018,7 +1038,7 @@ class SecurityGroup(CloudFormationModel):
         self.ip_ranges = []
         self.ec2_security_groups = []
         self.tags = tags
-        self.owner_id = ACCOUNT_ID
+        self.owner_id = get_account_id()
         self.vpc_id = None
 
     def to_xml(self):
@@ -1094,7 +1114,7 @@ class SecurityGroup(CloudFormationModel):
 
         ec2_backend = ec2_backends[region_name]
         rds_backend = rds_backends[region_name]
-        security_group = rds_backend.create_security_group(
+        security_group = rds_backend.create_db_security_group(
             group_name, description, tags
         )
         for security_group_ingress in security_group_ingress_rules:
@@ -1226,8 +1246,8 @@ class SubnetGroup(CloudFormationModel):
 
 
 class RDSBackend(BaseBackend):
-    def __init__(self, region):
-        self.region = region
+    def __init__(self, region_name, account_id):
+        super().__init__(region_name, account_id)
         self.arn_regex = re_compile(
             r"^arn:aws:rds:.*:[0-9]*:(db|cluster|es|og|pg|ri|secgrp|snapshot|cluster-snapshot|subgrp):.*$"
         )
@@ -1242,12 +1262,6 @@ class RDSBackend(BaseBackend):
         self.security_groups = {}
         self.subnet_groups = {}
 
-    def reset(self):
-        # preserve region
-        region = self.region
-        self.__dict__ = {}
-        self.__init__(region)
-
     @staticmethod
     def default_vpc_endpoint_service(service_region, zones):
         """Default VPC endpoint service."""
@@ -1257,13 +1271,13 @@ class RDSBackend(BaseBackend):
             service_region, zones, "rds-data"
         )
 
-    def create_database(self, db_kwargs):
+    def create_db_instance(self, db_kwargs):
         database_id = db_kwargs["db_instance_identifier"]
         database = Database(**db_kwargs)
         self.databases[database_id] = database
         return database
 
-    def create_database_snapshot(
+    def create_db_snapshot(
         self, db_instance_identifier, db_snapshot_identifier, tags=None
     ):
         database = self.databases.get(db_instance_identifier)
@@ -1307,7 +1321,7 @@ class RDSBackend(BaseBackend):
 
         return target_snapshot
 
-    def delete_database_snapshot(self, db_snapshot_identifier):
+    def delete_db_snapshot(self, db_snapshot_identifier):
         if db_snapshot_identifier not in self.database_snapshots:
             raise DBSnapshotNotFoundError(db_snapshot_identifier)
 
@@ -1318,7 +1332,7 @@ class RDSBackend(BaseBackend):
         source_database_id = db_kwargs["source_db_identifier"]
         primary = self.find_db_from_id(source_database_id)
         if self.arn_regex.match(source_database_id):
-            db_kwargs["region"] = self.region
+            db_kwargs["region"] = self.region_name
 
         # Shouldn't really copy here as the instance is duplicated. RDS replicas have different instances.
         replica = copy.copy(primary)
@@ -1328,7 +1342,7 @@ class RDSBackend(BaseBackend):
         primary.add_replica(replica)
         return replica
 
-    def describe_databases(self, db_instance_identifier=None, filters=None):
+    def describe_db_instances(self, db_instance_identifier=None, filters=None):
         databases = self.databases
         if db_instance_identifier:
             filters = merge_filters(
@@ -1358,8 +1372,8 @@ class RDSBackend(BaseBackend):
             raise DBSnapshotNotFoundError(db_snapshot_identifier)
         return list(snapshots.values())
 
-    def modify_database(self, db_instance_identifier, db_kwargs):
-        database = self.describe_databases(db_instance_identifier)[0]
+    def modify_db_instance(self, db_instance_identifier, db_kwargs):
+        database = self.describe_db_instances(db_instance_identifier)[0]
         if "new_db_instance_identifier" in db_kwargs:
             del self.databases[db_instance_identifier]
             db_instance_identifier = db_kwargs[
@@ -1370,7 +1384,7 @@ class RDSBackend(BaseBackend):
         return database
 
     def reboot_db_instance(self, db_instance_identifier):
-        database = self.describe_databases(db_instance_identifier)[0]
+        database = self.describe_db_instances(db_instance_identifier)[0]
         return database
 
     def restore_db_instance_from_db_snapshot(self, from_snapshot_id, overrides):
@@ -1388,10 +1402,10 @@ class RDSBackend(BaseBackend):
             if value:
                 new_instance_props[key] = value
 
-        return self.create_database(new_instance_props)
+        return self.create_db_instance(new_instance_props)
 
-    def stop_database(self, db_instance_identifier, db_snapshot_identifier=None):
-        database = self.describe_databases(db_instance_identifier)[0]
+    def stop_db_instance(self, db_instance_identifier, db_snapshot_identifier=None):
+        database = self.describe_db_instances(db_instance_identifier)[0]
         # todo: certain rds types not allowed to be stopped at this time.
         # https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_StopInstance.html#USER_StopInstance.Limitations
         if database.is_replica or (
@@ -1402,14 +1416,12 @@ class RDSBackend(BaseBackend):
         if database.status != "available":
             raise InvalidDBInstanceStateError(db_instance_identifier, "stop")
         if db_snapshot_identifier:
-            self.create_database_snapshot(
-                db_instance_identifier, db_snapshot_identifier
-            )
+            self.create_db_snapshot(db_instance_identifier, db_snapshot_identifier)
         database.status = "stopped"
         return database
 
-    def start_database(self, db_instance_identifier):
-        database = self.describe_databases(db_instance_identifier)[0]
+    def start_db_instance(self, db_instance_identifier):
+        database = self.describe_db_instances(db_instance_identifier)[0]
         # todo: bunch of different error messages to be generated from this api call
         if database.status != "stopped":
             raise InvalidDBInstanceStateError(db_instance_identifier, "start")
@@ -1426,16 +1438,16 @@ class RDSBackend(BaseBackend):
             backend = self
             db_name = db_id
 
-        return backend.describe_databases(db_name)[0]
+        return backend.describe_db_instances(db_name)[0]
 
-    def delete_database(self, db_instance_identifier, db_snapshot_name=None):
+    def delete_db_instance(self, db_instance_identifier, db_snapshot_name=None):
         if db_instance_identifier in self.databases:
             if self.databases[db_instance_identifier].deletion_protection:
                 raise InvalidParameterValue(
                     "Can't delete Instance with protection enabled"
                 )
             if db_snapshot_name:
-                self.create_database_snapshot(db_instance_identifier, db_snapshot_name)
+                self.create_db_snapshot(db_instance_identifier, db_snapshot_name)
             database = self.databases.pop(db_instance_identifier)
             if database.is_replica:
                 primary = self.find_db_from_id(database.source_db_identifier)
@@ -1445,7 +1457,7 @@ class RDSBackend(BaseBackend):
         else:
             raise DBInstanceNotFoundError(db_instance_identifier)
 
-    def create_security_group(self, group_name, description, tags):
+    def create_db_security_group(self, group_name, description, tags):
         security_group = SecurityGroup(group_name, description, tags)
         self.security_groups[group_name] = security_group
         return security_group
@@ -1680,7 +1692,7 @@ class RDSBackend(BaseBackend):
                 "InvalidParameterValue",
                 "The parameter DBParameterGroupName must be provided and must not be blank.",
             )
-        db_parameter_group_kwargs["region"] = self.region
+        db_parameter_group_kwargs["region"] = self.region_name
         db_parameter_group = DBParameterGroup(**db_parameter_group_kwargs)
         self.db_parameter_groups[db_parameter_group_id] = db_parameter_group
         return db_parameter_group
@@ -1803,12 +1815,14 @@ class RDSBackend(BaseBackend):
             raise DBClusterSnapshotNotFoundError(db_snapshot_identifier)
         return list(snapshots.values())
 
-    def delete_db_cluster(self, cluster_identifier):
+    def delete_db_cluster(self, cluster_identifier, snapshot_name=None):
         if cluster_identifier in self.clusters:
             if self.clusters[cluster_identifier].deletion_protection:
                 raise InvalidParameterValue(
                     "Can't delete Cluster with protection enabled"
                 )
+            if snapshot_name:
+                self.create_db_cluster_snapshot(cluster_identifier, snapshot_name)
             return self.clusters.pop(cluster_identifier)
         raise DBClusterNotFoundError(cluster_identifier)
 
@@ -1985,6 +1999,9 @@ class RDSBackend(BaseBackend):
             elif resource_type == "snapshot":  # DB Snapshot
                 if resource_name in self.database_snapshots:
                     return self.database_snapshots[resource_name].remove_tags(tag_keys)
+            elif resource_type == "cluster":
+                if resource_name in self.clusters:
+                    return self.clusters[resource_name].remove_tags(tag_keys)
             elif resource_type == "cluster-snapshot":  # DB Cluster Snapshot
                 if resource_name in self.cluster_snapshots:
                     return self.cluster_snapshots[resource_name].remove_tags(tag_keys)
@@ -1999,8 +2016,8 @@ class RDSBackend(BaseBackend):
     def add_tags_to_resource(self, arn, tags):
         if self.arn_regex.match(arn):
             arn_breakdown = arn.split(":")
-            resource_type = arn_breakdown[len(arn_breakdown) - 2]
-            resource_name = arn_breakdown[len(arn_breakdown) - 1]
+            resource_type = arn_breakdown[-2]
+            resource_name = arn_breakdown[-1]
             if resource_type == "db":  # Database
                 if resource_name in self.databases:
                     return self.databases[resource_name].add_tags(tags)
@@ -2021,6 +2038,9 @@ class RDSBackend(BaseBackend):
             elif resource_type == "snapshot":  # DB Snapshot
                 if resource_name in self.database_snapshots:
                     return self.database_snapshots[resource_name].add_tags(tags)
+            elif resource_type == "cluster":
+                if resource_name in self.clusters:
+                    return self.clusters[resource_name].add_tags(tags)
             elif resource_type == "cluster-snapshot":  # DB Cluster Snapshot
                 if resource_name in self.cluster_snapshots:
                     return self.cluster_snapshots[resource_name].add_tags(tags)
@@ -2113,97 +2133,8 @@ class OptionGroup(object):
         self.tags = [tag_set for tag_set in self.tags if tag_set["Key"] not in tag_keys]
 
 
-class OptionGroupOption(object):
-    def __init__(self, **kwargs):
-        self.default_port = kwargs.get("default_port")
-        self.description = kwargs.get("description")
-        self.engine_name = kwargs.get("engine_name")
-        self.major_engine_version = kwargs.get("major_engine_version")
-        self.name = kwargs.get("name")
-        self.option_group_option_settings = self._make_option_group_option_settings(
-            kwargs.get("option_group_option_settings", [])
-        )
-        self.options_depended_on = kwargs.get("options_depended_on", [])
-        self.permanent = kwargs.get("permanent")
-        self.persistent = kwargs.get("persistent")
-        self.port_required = kwargs.get("port_required")
-
-    def _make_option_group_option_settings(self, option_group_option_settings_kwargs):
-        return [
-            OptionGroupOptionSetting(**setting_kwargs)
-            for setting_kwargs in option_group_option_settings_kwargs
-        ]
-
-    def to_json(self):
-        template = Template(
-            """{ "MinimumRequiredMinorEngineVersion":
-            "2789.0.v1",
-            "OptionsDependedOn": [],
-            "MajorEngineVersion": "10.50",
-            "Persistent": false,
-            "DefaultPort": null,
-            "Permanent": false,
-            "OptionGroupOptionSettings": [],
-            "EngineName": "sqlserver-se",
-            "Name": "Mirroring",
-            "PortRequired": false,
-            "Description": "SQLServer Database Mirroring"
-        }"""
-        )
-        return template.render(option_group=self)
-
-    def to_xml(self):
-        template = Template(
-            """<OptionGroupOption>
-    <MajorEngineVersion>{{ option_group.major_engine_version }}</MajorEngineVersion>
-    <DefaultPort>{{ option_group.default_port }}</DefaultPort>
-    <PortRequired>{{ option_group.port_required }}</PortRequired>
-    <Persistent>{{ option_group.persistent }}</Persistent>
-    <OptionsDependedOn>
-    {%- for option_name in option_group.options_depended_on -%}
-      <OptionName>{{ option_name }}</OptionName>
-    {%- endfor -%}
-    </OptionsDependedOn>
-    <Permanent>{{ option_group.permanent }}</Permanent>
-    <Description>{{ option_group.description }}</Description>
-    <Name>{{ option_group.name }}</Name>
-    <OptionGroupOptionSettings>
-    {%- for setting in option_group.option_group_option_settings -%}
-      {{ setting.to_xml() }}
-    {%- endfor -%}
-    </OptionGroupOptionSettings>
-    <EngineName>{{ option_group.engine_name }}</EngineName>
-    <MinimumRequiredMinorEngineVersion>{{ option_group.minimum_required_minor_engine_version }}</MinimumRequiredMinorEngineVersion>
-</OptionGroupOption>"""
-        )
-        return template.render(option_group=self)
-
-
-class OptionGroupOptionSetting(object):
-    def __init__(self, *kwargs):
-        self.allowed_values = kwargs.get("allowed_values")
-        self.apply_type = kwargs.get("apply_type")
-        self.default_value = kwargs.get("default_value")
-        self.is_modifiable = kwargs.get("is_modifiable")
-        self.setting_description = kwargs.get("setting_description")
-        self.setting_name = kwargs.get("setting_name")
-
-    def to_xml(self):
-        template = Template(
-            """<OptionGroupOptionSetting>
-    <AllowedValues>{{ option_group_option_setting.allowed_values }}</AllowedValues>
-    <ApplyType>{{ option_group_option_setting.apply_type }}</ApplyType>
-    <DefaultValue>{{ option_group_option_setting.default_value }}</DefaultValue>
-    <IsModifiable>{{ option_group_option_setting.is_modifiable }}</IsModifiable>
-    <SettingDescription>{{ option_group_option_setting.setting_description }}</SettingDescription>
-    <SettingName>{{ option_group_option_setting.setting_name }}</SettingName>
-</OptionGroupOptionSetting>"""
-        )
-        return template.render(option_group_option_setting=self)
-
-
 def make_rds_arn(region, name):
-    return "arn:aws:rds:{0}:{1}:pg:{2}".format(region, ACCOUNT_ID, name)
+    return "arn:aws:rds:{0}:{1}:pg:{2}".format(region, get_account_id(), name)
 
 
 class DBParameterGroup(CloudFormationModel):

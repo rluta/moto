@@ -6,8 +6,10 @@ from email.mime.base import MIMEBase
 from email.utils import parseaddr
 from email.mime.multipart import MIMEMultipart
 from email.encoders import encode_7or8bit
+from typing import Mapping
 
 from moto.core import BaseBackend, BaseModel
+from moto.core.utils import BackendDict
 from moto.sns.models import sns_backends
 from .exceptions import (
     MessageRejectedError,
@@ -106,7 +108,8 @@ def are_all_variables_present(template, template_data):
 
 
 class SESBackend(BaseBackend):
-    def __init__(self):
+    def __init__(self, region_name, account_id):
+        super().__init__(region_name, account_id)
         self.addresses = []
         self.email_addresses = []
         self.domains = []
@@ -132,7 +135,8 @@ class SESBackend(BaseBackend):
 
     def verify_email_identity(self, address):
         _, address = parseaddr(address)
-        self.addresses.append(address)
+        if address not in self.addresses:
+            self.addresses.append(address)
 
     def verify_email_address(self, address):
         _, address = parseaddr(address)
@@ -462,8 +466,8 @@ class SESBackend(BaseBackend):
         for receipt_rule in rule_set:
             if receipt_rule["name"] == rule_name:
                 return receipt_rule
-        else:
-            raise RuleDoesNotExist("Invalid Rule Name.")
+
+        raise RuleDoesNotExist("Invalid Rule Name.")
 
     def update_receipt_rule(self, rule_set_name, rule):
         rule_set = self.receipt_rule_set.get(rule_set_name)
@@ -522,5 +526,18 @@ class SESBackend(BaseBackend):
 
         return attributes_by_identity
 
+    def get_identity_verification_attributes(self, identities=None):
+        if identities is None:
+            identities = []
 
-ses_backend = SESBackend()
+        attributes_by_identity = {}
+        for identity in identities:
+            if identity in (self.domains + self.addresses):
+                attributes_by_identity[identity] = "Success"
+
+        return attributes_by_identity
+
+
+ses_backends: Mapping[str, SESBackend] = BackendDict(
+    SESBackend, "ses", use_boto3_regions=False, additional_regions=["global"]
+)
